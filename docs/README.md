@@ -45,6 +45,6 @@
 - [../README.md](../README.md) —— 项目总览（中文）
 - [../README.en.md](../README.en.md) —— Project overview (English)
 - [../CREDITS.md](../CREDITS.md) —— 素材与字体版权
-- [../LICENSE](../LICENSE) —— 许可协议（非商业免费 / 衍生必须开源 / 商业需授权）
+- [../LICENSE](../LICENSE) —— GNU AGPL-3.0（可商用 / 衍生与网络服务必须开源）
 - [../background/README.md](../background/README.md) —— 底图说明与添加方法
 - [../fonts/README.md](../fonts/README.md) —— 字体说明与替换建议

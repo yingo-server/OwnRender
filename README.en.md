@@ -188,10 +188,25 @@ OwnRender/
 
 ## License
 
-**OwnRender License v1.0** — see [LICENSE](LICENSE)
+**GNU Affero General Public License v3.0 (AGPL-3.0)** — full text in [LICENSE](LICENSE)
 
-- ✅ Free for personal / research / **non-commercial** use
-- 🔁 **Derivatives must be open-sourced** under the same license
-- 💼 **Commercial use requires separate authorization** — open an Issue to get in touch
-- ⚠️ Third-party assets in `fonts/` and `background/` are **not** covered by
-  this license — see [CREDITS.md](CREDITS.md)
+```
+Copyright (C) 2025 yingo-server and OwnRender contributors
+```
+
+- ✅ Free to use, modify and distribute, **including commercially**
+- 🔁 **Derivatives must be open source**: when you distribute the program, or
+  **offer it to users over a network**, you must provide the complete
+  corresponding source under AGPL-3.0 (see AGPL §13)
+- 🧾 **No warranty**: provided "AS IS", without any warranty or liability
+  (AGPL §15–§17)
+- 💼 If you **cannot accept AGPL's source-disclosure obligations** (e.g. closed
+  products, closed SaaS), contact the author for a **commercial license**
+  (dual licensing)
+- ⚠️ Third-party assets in `fonts/` and `background/` are **outside the scope of
+  the code license** and keep their own terms — see [CREDITS.md](CREDITS.md)
+
+Asset takedown requests ([DMCA]) or commercial licensing: open an **Issue**.
+
+> 📌 The program and CLI still use the historical name `agnes-render` (banner,
+> `--help` prog name); it is the same project as the OwnRender repository.

@@ -234,11 +234,22 @@ OwnRender/
 
 ## 许可
 
-**OwnRender License v1.0** —— 见 [LICENSE](LICENSE)
+**GNU Affero General Public License v3.0（AGPL-3.0）** —— 全文见 [LICENSE](LICENSE)
 
-- ✅ 个人学习、研究、非商业使用：免费
-- 🔁 **衍生作品必须开源**，且必须沿用本协议
-- 💼 **商业使用需另行联系作者授权**
-- ⚠️ `fonts/` 与 `background/` 中的第三方素材**不适用**本协议，见 [CREDITS.md](CREDITS.md)
+```
+Copyright (C) 2025 yingo-server and OwnRender contributors
+```
 
-商业授权 / 素材申诉：请提交 **Issue**。
+- ✅ 可自由使用、修改、分发，**包括商业使用**
+- 🔁 **衍生作品必须开源**：分发二进制或源码，以及**通过网络向用户提供服务**时，
+  都必须按 AGPL-3.0 向接收者提供完整对应源码，并以同一协议授权（AGPL §13 网络条款）
+- 🧾 **无担保**：本软件按"原样"提供，作者不承担任何担保与责任（AGPL §15–§17）
+- 💼 如果你的场景**无法接受 AGPL 的开源义务**（例如闭源产品内嵌、闭源 SaaS），
+  可联系作者洽谈**商业授权**（双授权）
+- ⚠️ `fonts/` 与 `background/` 中的第三方素材**不属于代码许可的覆盖范围**，
+  各有其自身条款，见 [CREDITS.md](CREDITS.md)
+
+素材侵权申诉（[DMCA]）或商业授权：请提交 **Issue**。
+
+> 📌 程序内部与命令行仍沿用历史名 `agnes-render`（启动横幅、`--help` 的 prog 名），
+> 与仓库名 OwnRender 是同一个项目。

@@ -1,9 +1,13 @@
 # 素材来源与版权声明 / Credits & Third-Party Notices
 
-> 本项目**代码与文档**采用 [OwnRender License v1.0](LICENSE)：非商业免费、
-> 衍生必须开源、商业需另行联系授权。
-> 本文件列出的是**第三方素材**（字体、底图），它们**不属于**上述协议覆盖范围，
+> 本项目**代码与文档**采用 [GNU AGPL-3.0](LICENSE) 授权：可自由使用（含商业使用），
+> 但**衍生作品与网络服务必须开源**。
+> 本文件列出的是**第三方素材**（字体、底图），它们**不属于**代码许可的覆盖范围，
 > 各自版权归原作者所有。
+
+```
+Copyright (C) 2025 yingo-server and OwnRender contributors
+```
 
 ---
 
@@ -60,9 +64,9 @@
 
 # English (summary)
 
-- **Code & docs** are licensed under [OwnRender License v1.0](LICENSE):
-  free for non-commercial use, derivatives **must** be open-sourced under the
-  same license, commercial use requires separate authorization.
+- **Code & docs** are licensed under [GNU AGPL-3.0](LICENSE): free to use,
+  including commercially; **derivatives and network services must release their
+  source** under AGPL-3.0.
 - **Fonts** in `fonts/` were **collected from the public internet** and are
   included **for non-commercial study only**. Copyright belongs to their
   original foundries. We claim no rights. Commercial use requires a license
