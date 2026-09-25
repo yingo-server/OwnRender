@@ -142,9 +142,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 # ═══════════════════════════════════════════════════════════════════
 def normalize_args(args):
-    """--window-side → --window-orientation"""
+    """--window-side → --window-orientation；--offline-bg → --background"""
     if args.window_orientation is None and args.window_side:
         args.window_orientation = args.window_side
+    # 内置底图模式：--offline-bg 此前只切换了模式，并未参与选图（静默回退默认底图）
+    if getattr(args, "offline_bg", None) and not args.background:
+        args.background = args.offline_bg
 
 
 def has_generate_args(args) -> bool:

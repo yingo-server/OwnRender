@@ -193,6 +193,16 @@ them. A bundled fallback copy exists inside the binary.
 
 **Can the Android `.so` be used in Termux?** No — use the source version there.
 
+**Why is the macOS (Intel) package missing from a Release?** GitHub's `macos-13`
+(Intel) runners are scarce and queue for a long time; that leg is marked
+"allowed to fail" so a missing Intel build never blocks a release. Try the next
+automatic build, or use the source version / the Apple Silicon package.
+
+**Are the artifacts updated automatically?** Yes. Every push to `main` rebuilds
+and refreshes the three desktop packages, the Android `.so` and the docs bundle
+in the `nightly` prerelease; pushing a `v*` tag publishes a stable release. This
+document is embedded in the release body.
+
 <!-- binaries-link -->
 ---
 
