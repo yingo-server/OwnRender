@@ -18,6 +18,9 @@ concurrency:
 env:
   PYTHON_VERSION: '3.12'
   OWNRENDER_HOME: ${{ github.workspace }}
+  # Windows 控制台默认 cp1252/cp936，强制 Python 走 UTF-8，避免中文输出炸掉
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: 'utf-8'
 
 jobs:
   # ══════════════════════════════════════════════════════════════

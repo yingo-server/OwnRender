@@ -36,6 +36,20 @@ IS_MAC = sys.platform == "darwin"
 EXE = "ownrender.exe" if IS_WIN else "ownrender"
 
 
+def _fix_encoding():
+    """Windows 控制台默认 cp1252/cp936，打印中文会抛 UnicodeEncodeError。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            enc = (getattr(stream, "encoding", "") or "").lower()
+            if enc not in ("utf-8", "utf8"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_fix_encoding()
+
+
 def arch() -> str:
     m = platform.machine().lower()
     return {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64",
