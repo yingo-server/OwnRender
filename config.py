@@ -33,17 +33,89 @@ PROG = "agnes-render"
 # ═══════════════════════════════════════════════════════════════════
 # 路径
 # ═══════════════════════════════════════════════════════════════════
-BASE_DIR = Path(__file__).parent.resolve()
-CONFIG_DIR = BASE_DIR / "config"
+def _is_frozen() -> bool:
+    """是否为打包后的可执行文件（Nuitka / PyInstaller）。"""
+    return bool(getattr(sys, "frozen", False)) or ("__compiled__" in globals())
+
+
+def _self_dir() -> Path:
+    """本模块所在目录。打包后 onefile 指向解包临时目录，standalone 指向 dist 目录。"""
+    try:
+        return Path(__file__).resolve().parent
+    except Exception:
+        return Path.cwd()
+
+
+def _exe_dir():
+    """可执行文件所在目录（打包后用户放自己素材的地方）。"""
+    try:
+        cand = Path(sys.argv[0]).resolve().parent
+    except Exception:
+        return None
+    return cand if cand.is_dir() else None
+
+
+def _writable(path: Path) -> bool:
+    """目录是否可写（会尝试创建）。"""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_test"
+        probe.write_text("x", encoding="utf-8")
+        probe.unlink()
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_base_dir() -> Path:
+    """
+    便携根目录：
+      1) 环境变量 OWNRENDER_HOME
+      2) 打包后：可执行文件同级目录（若含 background/fonts/config/output 之一）
+      3) 源码目录
+    """
+    env = os.environ.get("OWNRENDER_HOME")
+    if env and Path(env).is_dir():
+        return Path(env).resolve()
+    src = _self_dir()
+    exe = _exe_dir()
+    if exe and exe.resolve() != src:
+        for marker in ("background", "fonts", "config", "output"):
+            if (exe / marker).exists():
+                return exe
+    return src
+
+
+def _resolve_asset_dir(name: str, base: Path) -> Path:
+    """素材目录：优先便携根目录（用户可替换），其次内置（打包时随包携带）。"""
+    for cand in (base / name, _self_dir() / name):
+        if cand.is_dir():
+            return cand
+    return base / name
+
+
+# ── 路径 ────────────────────────────────────────────────────────────
+BASE_DIR = _resolve_base_dir()
+
+_DEF_CONFIG = BASE_DIR / "config"
+if not _writable(_DEF_CONFIG):                      # 只读安装目录 → 退回用户配置目录
+    _DEF_CONFIG = (Path(os.environ.get("XDG_CONFIG_HOME")
+                        or (Path.home() / ".config")) / "ownrender")
+CONFIG_DIR = _DEF_CONFIG
 CONFIG_SETTINGS = CONFIG_DIR / "settings.json"
 CONFIG_PROMPTS  = CONFIG_DIR / "prompts.json"
 CONFIG_LIGHTING = CONFIG_DIR / "lighting.json"
 CONFIG_TOKEN    = CONFIG_DIR / "token.json"
 CONFIG_LOCATION = CONFIG_DIR / "device_location.json"
 LOG_DIR     = CONFIG_DIR / "logs"
-OUTPUT_DIR  = BASE_DIR / "output"
-FONT_DIR    = BASE_DIR / "fonts"
-BG_DIR      = BASE_DIR / "background"
+
+_DEF_OUTPUT = BASE_DIR / "output"
+if not _writable(_DEF_OUTPUT):                      # 只读 → 退回用户主目录
+    _DEF_OUTPUT = Path.home() / "OwnRender-output"
+OUTPUT_DIR = _DEF_OUTPUT
+
+FONT_DIR = _resolve_asset_dir("fonts", BASE_DIR)
+BG_DIR   = _resolve_asset_dir("background", BASE_DIR)
 
 
 # ═══════════════════════════════════════════════════════════════════

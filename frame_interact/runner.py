@@ -209,6 +209,18 @@ def run(argv=None) -> int:
                          image_path=args.input_image)
 
     # ── 菜单循环 ──
+    # 非交互终端下不进入 TUI（被当作库/被 CI 调用时，避免卡住）
+    try:
+        _tty = sys.stdin.isatty()
+    except Exception:
+        _tty = False
+    if not _tty:
+        print(f"{config.PROG} {config.VERSION}")
+        print("未指定参数且当前不是交互终端 —— 已切换为「参数模式」。")
+        print("完整参数见: --help 或 docs/命令行参数.md\n")
+        parser.print_help()
+        return 2
+
     while True:
         try:
             action = main_menu()

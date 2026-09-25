@@ -98,3 +98,8 @@ python main.py --offline-bg 石灰墙 -y
 本目录中的图片为项目自带素材，随本项目在 **GNU AGPL-3.0** 下提供
 （可自由使用含商用；衍生与网络服务必须开源）。
 其它说明见 [../CREDITS.md](../CREDITS.md)。
+
+<!-- binaries-link -->
+---
+
+📦 **二进制包**（Windows / Linux / macOS / Android `.so`，由 CI 用 Nuitka 自动构建）—— **下载与使用方式 → [../docs/二进制包.md](../docs/二进制包.md)**

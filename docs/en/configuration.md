@@ -152,3 +152,8 @@ rm -rf config/
 
 On startup the program **self-heals** missing config keys (adds them, never
 overwrites existing values).
+
+<!-- binaries-link -->
+---
+
+📦 **Binary packages** (Windows / Linux / macOS / Android `.so`, built by CI with Nuitka) — **download & usage → [binaries.md](binaries.md)**

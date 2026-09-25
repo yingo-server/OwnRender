@@ -253,3 +253,8 @@ Copyright (C) 2025 yingo-server and OwnRender contributors
 
 > 📌 程序内部与命令行仍沿用历史名 `agnes-render`（启动横幅、`--help` 的 prog 名），
 > 与仓库名 OwnRender 是同一个项目。
+
+<!-- binaries-link -->
+---
+
+📦 **二进制包**（Windows / Linux / macOS / Android `.so`，由 CI 用 Nuitka 自动构建）—— **下载与使用方式 → [docs/二进制包.md](docs/二进制包.md)**

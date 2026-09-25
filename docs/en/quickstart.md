@@ -138,3 +138,8 @@ python main.py --offline-bg 微水泥 \
 - Every flag → [cli.md](cli.md)
 - Swap fonts/textures → [../../fonts/README.md](../../fonts/README.md),
   [../../background/README.md](../../background/README.md)
+
+<!-- binaries-link -->
+---
+
+📦 **Binary packages** (Windows / Linux / macOS / Android `.so`, built by CI with Nuitka) — **download & usage → [binaries.md](binaries.md)**

@@ -154,3 +154,8 @@ A patch is a region clearly brighter than its surroundings. If it's daytime,
 ```bash
 python main.py --offline-bg 微水泥 --seed 12345 -y
 ```
+
+<!-- binaries-link -->
+---
+
+📦 **Binary packages** (Windows / Linux / macOS / Android `.so`, built by CI with Nuitka) — **download & usage → [binaries.md](binaries.md)**

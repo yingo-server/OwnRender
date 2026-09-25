@@ -10,6 +10,7 @@
 |---|---|
 | [快速开始](快速开始.md) | 5 分钟跑出第一张图：TUI 怎么点、命令行怎么敲 |
 | [依赖与安装](依赖与安装.md) | 预装库、各平台安装步骤、离线/在线的区别 |
+| [二进制包](二进制包.md) | **不用装 Python**：CI 自动构建的 Windows / Linux / macOS 可执行文件，以及 Android `.so`（定位适配看这篇） |
 
 ## 🟡 进阶（想调好效果）
 
@@ -48,3 +49,8 @@
 - [../LICENSE](../LICENSE) —— GNU AGPL-3.0（可商用 / 衍生与网络服务必须开源）
 - [../background/README.md](../background/README.md) —— 底图说明与添加方法
 - [../fonts/README.md](../fonts/README.md) —— 字体说明与替换建议
+
+<!-- binaries-link -->
+---
+
+📦 **二进制包**（Windows / Linux / macOS / Android `.so`，由 CI 用 Nuitka 自动构建）—— **下载与使用方式 → [二进制包.md](二进制包.md)**

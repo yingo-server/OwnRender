@@ -19,11 +19,23 @@ if str(_PROJ_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJ_ROOT))
 
 
+def run_args(argv=None) -> int:
+    """
+    纯参数入口（供打包后的可执行文件 / Android .so / JNI / 宿主程序调用）。
+    只解析参数并执行，不进入交互 TUI。
+    """
+    import config
+    config.ensure_config_files()
+    import frame_interact
+    if argv is None:
+        argv = sys.argv[1:]
+    return frame_interact.run(list(argv))
+
+
 def main() -> int:
     # 1. 初始化配置（首次生成 / 缺失键自动补全）
     import config
     config.ensure_config_files()
-
     # 2. 引入交互子框架（它内部会引入 light / render）
     import frame_interact
 

@@ -102,3 +102,8 @@ rm -rf output/     # renders only
 rm -rf config/     # all user config (token, prompts, …)
 python main.py --reset-config
 ```
+
+<!-- binaries-link -->
+---
+
+📦 **Binary packages** (Windows / Linux / macOS / Android `.so`, built by CI with Nuitka) — **download & usage → [binaries.md](binaries.md)**
