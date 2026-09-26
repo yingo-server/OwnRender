@@ -1,0 +1,1932 @@
+{
+  "prog": "agnes-render",
+  "version": "10.0.0",
+  "source_of_truth": [
+    "frame_interact/cli.py",
+    "config.py"
+  ],
+  "generated_by": "tools/gen_cli_doc.py",
+  "modes": [
+    {
+      "key": "tui",
+      "desc": "无参数交互式界面",
+      "cmd": "agnes-render",
+      "notes": "有 TTY 时进入 TUI；非 TTY 自动退化打印 --help"
+    },
+    {
+      "key": "ai",
+      "desc": "云端生成底图 + 叠字",
+      "cmd": "agnes-render --ai -t \"...\" -y",
+      "notes": "需要 token；产出 raw 底图与 final 成图"
+    },
+    {
+      "key": "offline",
+      "desc": "内置底图 + 真实光照计算 + 叠字",
+      "cmd": "agnes-render --offline-bg 微水泥 -t \"...\" -y",
+      "notes": "全程离线，最常用；物理光照可按时间/坐标/天气调整"
+    },
+    {
+      "key": "custom",
+      "desc": "自有图片 + 光照 + 叠字",
+      "cmd": "agnes-render -i in.png -t \"...\" -y",
+      "notes": "不做 AI 生成，Pillow 读入后走同一条渲染链"
+    }
+  ],
+  "env": [
+    {
+      "name": "OWNRENDER_HOME",
+      "semantics": "便携根目录：优先用它定位 background/ fonts/ config/ output/。设为某目录后，素材/配置/输出都跟随它。",
+      "example": "OWNRENDER_HOME=/sdcard/ow ./ownrender -y"
+    },
+    {
+      "name": "OWNRENDER_ASCII",
+      "semantics": "强制用 ASCII 符号渲染终端输出（无 Unicode 的终端/日志）。",
+      "example": "OWNRENDER_ASCII=1"
+    },
+    {
+      "name": "OWNRENDER_UNICODE",
+      "semantics": "强制 Unicode（覆盖自动探测）。",
+      "example": "OWNRENDER_UNICODE=1"
+    },
+    {
+      "name": "OWNRENDER_NO_REEXEC",
+      "semantics": "禁止自我重启（打包/验收环境用，避免进程被替换）。",
+      "example": "OWNRENDER_NO_REEXEC=1"
+    },
+    {
+      "name": "NO_COLOR",
+      "semantics": "任何非空值＝关闭 ANSI 颜色（与 --no-color 等价）。",
+      "example": "NO_COLOR=1"
+    },
+    {
+      "name": "FORCE_COLOR",
+      "semantics": "强制开启颜色（覆盖自动探测）。",
+      "example": "FORCE_COLOR=1"
+    },
+    {
+      "name": "AGNES_API_TOKEN",
+      "semantics": "AI 模式令牌的环境变量形式（优先级低于 --token 之外，见 config）。",
+      "example": "AGNES_API_TOKEN=xxx"
+    },
+    {
+      "name": "TZ",
+      "semantics": "时区；影响默认时间与太阳位置推算（POSIX 名优先）。",
+      "example": "TZ=Asia/Shanghai"
+    },
+    {
+      "name": "XDG_CONFIG_HOME",
+      "semantics": "配置目录（安装目录只读时，配置落到 $XDG_CONFIG_HOME/ownrender）。",
+      "example": "XDG_CONFIG_HOME=/tmp/cfg"
+    },
+    {
+      "name": "LC_ALL / LANG / LANGUAGE",
+      "semantics": "影响终端编码探测与提示语言选择；哑终端下 LC_ALL=C 也能正常出图（已验证）。",
+      "example": "LC_ALL=C"
+    }
+  ],
+  "exit_codes": [
+    {
+      "code": "0",
+      "meaning": "成功（含 --dry-run / --no-render / 只读查询 / --set-location）"
+    },
+    {
+      "code": "1",
+      "meaning": "运行期错误：缺 token、底图/图片/字体不存在、定位失败、叠字失败、参数格式错"
+    },
+    {
+      "code": "2",
+      "meaning": "用法错误：未知参数、choices 越界（argparse 打印帮助并退出）"
+    },
+    {
+      "code": "130",
+      "meaning": "用户中断（Ctrl-C / TUI 里取消）"
+    }
+  ],
+  "outputs": {
+    "default_dir": "output/（可用 -o 覆盖）",
+    "final_image": "<output-dir>/<name>_final.png（--output-name 可固定 name）",
+    "intermediate": "光照底图 / raw 底图（--keep-lit 时保留）",
+    "stdout_fields": [
+      "字体",
+      "成品",
+      "耗时",
+      "光照 <n>ms",
+      "辐照度",
+      "可达性"
+    ],
+    "parse_hint": "要机器可读，请固定 -o 与 --output-name，并加 --no-color -y"
+  },
+  "choices": {
+    "resolution": [
+      "1K",
+      "2K",
+      "3K",
+      "4K"
+    ],
+    "aspect": [
+      "1:1",
+      "3:4",
+      "4:3",
+      "16:9",
+      "9:16",
+      "2:3",
+      "3:2",
+      "21:9"
+    ],
+    "anchor": [
+      "center",
+      "tl",
+      "tr",
+      "bl",
+      "br",
+      "tc",
+      "bc",
+      "lc",
+      "rc"
+    ],
+    "window_orientation": [
+      "left",
+      "right",
+      "n",
+      "ne",
+      "e",
+      "se",
+      "s",
+      "sw",
+      "w",
+      "nw"
+    ],
+    "weather": [
+      "auto",
+      "clear",
+      "cloudy",
+      "overcast",
+      "rain",
+      "snow",
+      "haze"
+    ],
+    "font_ext": [
+      ".otc",
+      ".otf",
+      ".ttc",
+      ".ttf",
+      ".woff",
+      ".woff2"
+    ],
+    "image_ext": [
+      ".bmp",
+      ".jpeg",
+      ".jpg",
+      ".png",
+      ".webp"
+    ]
+  },
+  "weather_presets": {
+    "clear": {
+      "cloud": 0,
+      "vis": 20000,
+      "humidity": 40,
+      "precip": 0.0
+    },
+    "cloudy": {
+      "cloud": 50,
+      "vis": 20000,
+      "humidity": 55,
+      "precip": 0.0
+    },
+    "overcast": {
+      "cloud": 85,
+      "vis": 15000,
+      "humidity": 70,
+      "precip": 0.0
+    },
+    "rain": {
+      "cloud": 80,
+      "vis": 8000,
+      "humidity": 90,
+      "precip": 2.0
+    },
+    "snow": {
+      "cloud": 85,
+      "vis": 5000,
+      "humidity": 85,
+      "precip": 3.0
+    },
+    "haze": {
+      "cloud": 40,
+      "vis": 3000,
+      "humidity": 70,
+      "precip": 0.0
+    }
+  },
+  "args": [
+    {
+      "group": "模式选择",
+      "flag": "--ai",
+      "aliases": [
+        "--ai"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "走云端 API 生成底图，再叠字。**没有 --offline-bg / -i 时就是它**。需 token。",
+      "units": null,
+      "interactions": [
+        "需要 --token 或已保存的配置；离线环境改用 --offline-bg"
+      ],
+      "example": "agnes-render --ai -t \"海压竹枝低复举\" -y",
+      "failure_modes": [
+        "无 token → exit 1（提示 需要 --token 或配置）",
+        "网络/服务不可达 → exit 1（底图生成失败）"
+      ],
+      "choices_note": null
+    },
+    {
+      "group": "模式选择",
+      "flag": "--offline-bg",
+      "aliases": [
+        "--offline-bg"
+      ],
+      "takes_value": true,
+      "metavar": "NAME",
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "用**内置底图**（background/ 里的图）做真实光照计算 + 叠字，全程离线。",
+      "units": null,
+      "interactions": [
+        "等价于 --background NAME（历史别名，已自动归一）",
+        "与 -i 互斥：同时给时以 -i 为准（自定义图优先）"
+      ],
+      "example": "agnes-render --offline-bg 微水泥 -y",
+      "failure_modes": [
+        "NAME 不存在 → exit 1（未在 background/ 找到底图）；先 --list-backgrounds"
+      ],
+      "choices_note": null
+    },
+    {
+      "group": "模式选择",
+      "flag": "--input-image",
+      "aliases": [
+        "-i",
+        "--input-image"
+      ],
+      "takes_value": true,
+      "metavar": "PATH",
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "",
+      "units": null,
+      "interactions": [],
+      "example": null,
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "模式选择",
+      "flag": "--background",
+      "aliases": [
+        "--background"
+      ],
+      "takes_value": true,
+      "metavar": "NAME",
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "指定内置底图名（与 --offline-bg 同义）。",
+      "units": null,
+      "interactions": [],
+      "example": "agnes-render --offline-bg 微水泥 --background 微水泥 -y",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "模式选择",
+      "flag": "--keep-lit",
+      "aliases": [
+        "--keep-lit"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "保留中间产物「光照底图」，便于只换文字时不重复算光照。",
+      "units": null,
+      "interactions": [
+        "会与 --no-render 一起用于「只出光照图」的流水线"
+      ],
+      "example": "agnes-render --offline-bg 微水泥 --keep-lit -y",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "输入输出",
+      "flag": "--text",
+      "aliases": [
+        "-t",
+        "--text"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "",
+      "units": null,
+      "interactions": [],
+      "example": null,
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "输入输出",
+      "flag": "--output",
+      "aliases": [
+        "-o",
+        "--output"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "",
+      "units": null,
+      "interactions": [],
+      "example": null,
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "输入输出",
+      "flag": "--output-name",
+      "aliases": [
+        "--output-name"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "输出文件名（不含扩展名）。缺省按时间戳命名，便于批量时固定名字。",
+      "units": null,
+      "interactions": [
+        "配合 -o 可得到确定路径：<o>/<output-name>_final.png"
+      ],
+      "example": "agnes-render --offline-bg 微水泥 --output-name cover -y",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "字体与位置",
+      "flag": "--font",
+      "aliases": [
+        "-f",
+        "--font"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "",
+      "units": null,
+      "interactions": [],
+      "example": null,
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "字体与位置",
+      "flag": "--font-ratio",
+      "aliases": [
+        "--font-ratio"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "字号相对画面高度的比例（浮点）。越大字越大。",
+      "units": null,
+      "interactions": [
+        "与 --font-anchor / --font-pos-* 共同决定版面"
+      ],
+      "example": "--font-ratio 0.18",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "字体与位置",
+      "flag": "--font-anchor",
+      "aliases": [
+        "--font-anchor"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": [
+        "bc",
+        "bl",
+        "br",
+        "center",
+        "lc",
+        "rc",
+        "tc",
+        "tl",
+        "tr"
+      ],
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "文字锚点（九宫格）。",
+      "units": null,
+      "interactions": [
+        "与 --font-pos-x/y 互斥：给了坐标则忽略锚点"
+      ],
+      "example": "--font-anchor bc",
+      "failure_modes": [],
+      "choices_note": "center/tl/tr/bl/br/tc/bc/lc/rc"
+    },
+    {
+      "group": "字体与位置",
+      "flag": "--font-pos-x",
+      "aliases": [
+        "--font-pos-x"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "文字锚点 X 坐标（0~1 相对宽）或像素，按实现取相对值。",
+      "units": null,
+      "interactions": [
+        "与 --font-pos-y 成对使用"
+      ],
+      "example": "--font-pos-x 0.5 --font-pos-y 0.8",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "字体与位置",
+      "flag": "--font-pos-y",
+      "aliases": [
+        "--font-pos-y"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "文字锚点 Y 坐标（与 --font-pos-x 配对）。",
+      "units": null,
+      "interactions": [],
+      "example": "--font-pos-y 0.8",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "窗户几何",
+      "flag": "--window-orientation",
+      "aliases": [
+        "--window-orientation"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": [
+        "e",
+        "left",
+        "n",
+        "ne",
+        "nw",
+        "right",
+        "s",
+        "se",
+        "sw",
+        "w"
+      ],
+      "nargs": null,
+      "default": null,
+      "help": "窗户朝向：left/right（左=朝西 右=朝东）或罗盘 n/ne/e/se/s/sw/w/nw",
+      "hidden": false,
+      "semantics": "窗户朝向，决定太阳入射方向。left=朝西，right=朝东；也可用真实罗盘 n/ne/e/se/s/sw/w/nw。",
+      "units": null,
+      "interactions": [
+        "历史别名 --window-side left|right 会被归一到这里"
+      ],
+      "example": "--window-orientation n",
+      "failure_modes": [],
+      "choices_note": "left/right/n/ne/e/se/s/sw/w/nw"
+    },
+    {
+      "group": "窗户几何",
+      "flag": "--window-side",
+      "aliases": [
+        "--window-side"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": [
+        "left",
+        "right"
+      ],
+      "nargs": null,
+      "default": null,
+      "help": "==SUPPRESS==",
+      "hidden": true,
+      "semantics": "（隐藏）旧参数，等价 --window-orientation left|right。",
+      "units": null,
+      "interactions": [
+        "仅兼容旧脚本用，新代码请用 --window-orientation"
+      ],
+      "example": "--window-side right",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "窗户几何",
+      "flag": "--window-scale",
+      "aliases": [
+        "--window-scale"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "窗户/投影尺度倍率。",
+      "units": null,
+      "interactions": [],
+      "example": "--window-scale 1.15",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "窗户几何",
+      "flag": "--grid-rows",
+      "aliases": [
+        "--grid-rows"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "int",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "窗格行数（影响投影的光斑形状）。",
+      "units": null,
+      "interactions": [
+        "与 --grid-cols / --grid-frame 成组"
+      ],
+      "example": "--grid-rows 3",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "窗户几何",
+      "flag": "--grid-cols",
+      "aliases": [
+        "--grid-cols"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "int",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "窗格列数。",
+      "units": null,
+      "interactions": [
+        "与 --grid-rows 成组"
+      ],
+      "example": "--grid-cols 2",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "窗户几何",
+      "flag": "--grid-frame",
+      "aliases": [
+        "--grid-frame"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "窗框粗细（相对量）。",
+      "units": null,
+      "interactions": [],
+      "example": "--grid-frame 0.06",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "窗户几何",
+      "flag": "--shadow-length",
+      "aliases": [
+        "--shadow-length"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "投影长度系数（太阳高度角之外的额外拉长）。",
+      "units": null,
+      "interactions": [
+        "--light-level 与 --time 会先决定几何，本项在其上调整"
+      ],
+      "example": "--shadow-length 1.4",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--time",
+      "aliases": [
+        "--time"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "指定时刻（决定太阳高度角/色温）。支持 ISO 与 \"YYYY-MM-DD HH:MM\"。",
+      "units": null,
+      "interactions": [
+        "不给则取本机时间（NTP，可用 --no-ntp 关）",
+        "与 --lat/--lon 一起才有物理意义"
+      ],
+      "example": "--time \"2024-06-21 12:00\"",
+      "failure_modes": [
+        "格式错 → 回退本机时间并提示"
+      ],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--lat",
+      "aliases": [
+        "--lat"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "纬度（十进制度，北纬为正）。",
+      "units": null,
+      "interactions": [
+        "与 --lon 成对",
+        "不给时按定位链获取"
+      ],
+      "example": "--lat 39.9042",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--lon",
+      "aliases": [
+        "--lon"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "经度（十进制度，东经为正）。",
+      "units": null,
+      "interactions": [
+        "与 --lat 成对"
+      ],
+      "example": "--lon 116.4074",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--city",
+      "aliases": [
+        "--city"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "城市名（仅用于展示/日志）。",
+      "units": null,
+      "interactions": [],
+      "example": "--city 北京",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--no-ntp",
+      "aliases": [
+        "--no-ntp"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "不走 NTP 校时，直接用系统时钟。",
+      "units": null,
+      "interactions": [
+        "内网/离线时用"
+      ],
+      "example": "--no-ntp",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--ntp-host",
+      "aliases": [
+        "--ntp-host"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "指定 NTP 服务器。",
+      "units": null,
+      "interactions": [
+        "先用 --list-ntp 看内置列表"
+      ],
+      "example": "--ntp-host time.google.com",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--no-gps",
+      "aliases": [
+        "--no-gps"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "禁止使用 GPS/系统定位（只允许 IP 或手填）。",
+      "units": null,
+      "interactions": [
+        "与 --gps 相反；隐私场景用",
+        "不给坐标的离线环境建议配合 --set-location"
+      ],
+      "example": "--no-gps",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--geo-service",
+      "aliases": [
+        "--geo-service"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "指定 IP 定位服务（先用 --list-services 查看）。",
+      "units": null,
+      "interactions": [],
+      "example": "--geo-service ipinfo.io",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--gps",
+      "aliases": [
+        "--gps"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "强制使用本机 GPS（termux-location/系统接口/缓存）",
+      "hidden": false,
+      "semantics": "强制走本机 GPS（termux-location / 系统接口 / 缓存）。",
+      "units": null,
+      "interactions": [
+        "Termux/Android 用",
+        "宿主未授权时请改 --lat/--lon"
+      ],
+      "example": "--gps --offline-bg 微水泥 -y",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--ip-loc",
+      "aliases": [
+        "--ip-loc"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "强制使用 IP 网络定位",
+      "hidden": false,
+      "semantics": "强制走 IP 网络定位。",
+      "units": null,
+      "interactions": [
+        "需要联网"
+      ],
+      "example": "--ip-loc",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "时间与位置",
+      "flag": "--set-location",
+      "aliases": [
+        "--set-location"
+      ],
+      "takes_value": true,
+      "metavar": "LAT,LON[,CITY]",
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "把坐标写入本机定位缓存，供以后一键使用",
+      "hidden": false,
+      "semantics": "把坐标写进本机缓存（LAT,LON[,CITY]），之后 --gps 一键命中。",
+      "units": null,
+      "interactions": [
+        "一次性动作：执行后 exit 0",
+        "顺带写缓存，不做渲染"
+      ],
+      "example": "--set-location \"39.9042,116.4074,北京\"",
+      "failure_modes": [
+        "格式错 → exit 1（行为 lat,lon[,city]）"
+      ],
+      "choices_note": null
+    },
+    {
+      "group": "天气",
+      "flag": "--weather",
+      "aliases": [
+        "--weather"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": [
+        "auto",
+        "clear",
+        "cloudy",
+        "haze",
+        "overcast",
+        "rain",
+        "snow"
+      ],
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "天气预设，影响云量/能见度/湿度/降水，进而影响光照强度与色偏。",
+      "units": null,
+      "interactions": [
+        "预设值会被 --cloud/--precip/--visibility/--humidity 逐个覆盖",
+        "auto = 调 API 查询（需联网/定位）"
+      ],
+      "example": "--weather clear",
+      "failure_modes": [],
+      "choices_note": "auto/clear/cloudy/overcast/rain/snow/haze"
+    },
+    {
+      "group": "天气",
+      "flag": "--cloud",
+      "aliases": [
+        "--cloud"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "云量（百分，0=晴）→ 削弱直射光，增强漫射。",
+      "units": "0~100",
+      "interactions": [
+        "覆盖 --weather 预设"
+      ],
+      "example": "--cloud 80",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "天气",
+      "flag": "--precip",
+      "aliases": [
+        "--precip"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "降水强度（0~100）→ 受影响的可达性/湿润感。",
+      "units": "0~100",
+      "interactions": [],
+      "example": "--precip 60",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "天气",
+      "flag": "--visibility",
+      "aliases": [
+        "--visibility"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "能见度（米，越大越通透；预设晴天为 20000）。",
+      "units": "米",
+      "interactions": [],
+      "example": "--visibility 5000",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "天气",
+      "flag": "--humidity",
+      "aliases": [
+        "--humidity"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "相对湿度（百分）。",
+      "units": "0~100",
+      "interactions": [],
+      "example": "--humidity 70",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "输出规格（AI 模式）",
+      "flag": "--resolution",
+      "aliases": [
+        "-r",
+        "--resolution"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": [
+        "1K",
+        "2K",
+        "3K",
+        "4K"
+      ],
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "",
+      "units": null,
+      "interactions": [],
+      "example": null,
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "输出规格（AI 模式）",
+      "flag": "--aspect",
+      "aliases": [
+        "-a",
+        "--aspect"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": [
+        "16:9",
+        "1:1",
+        "21:9",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "9:16"
+      ],
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "",
+      "units": null,
+      "interactions": [],
+      "example": null,
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "渲染",
+      "flag": "--light-level",
+      "aliases": [
+        "--light-level"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "int",
+      "choices": "0~12",
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "光照档位（0~12），按时间自动分类的等级；显式给出可覆盖自动判定。",
+      "units": "0~12",
+      "interactions": [
+        "--time/--weather 先算，再被本项覆盖"
+      ],
+      "example": "--light-level 6",
+      "failure_modes": [
+        "超范围 → argparse 报错 exit 2"
+      ],
+      "choices_note": null
+    },
+    {
+      "group": "渲染",
+      "flag": "--wall-desc",
+      "aliases": [
+        "--wall-desc"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "墙面材质描述（自然语言），只影响 AI 生成阶段的提示词。",
+      "units": null,
+      "interactions": [
+        "仅 --ai 生效；离线模式无效"
+      ],
+      "example": "--wall-desc \"斑驳的老水泥墙\"",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "渲染",
+      "flag": "--ssaa",
+      "aliases": [
+        "--ssaa"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "int",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "超采样倍数（1=关，越大越慢越干净）。",
+      "units": null,
+      "interactions": [
+        "耗时与倍率近似平方关系，4K 建议 <=2"
+      ],
+      "example": "--ssaa 2",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "渲染",
+      "flag": "--seed",
+      "aliases": [
+        "--seed"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "int",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "随机种子（固定后噪声/纹理可复现）。",
+      "units": null,
+      "interactions": [
+        "配合 --no-render/--show-config 做可复现实验"
+      ],
+      "example": "--seed 12345",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--cinnabar",
+      "aliases": [
+        "--cinnabar"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": 3,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "朱砂/主色 RGB（三个 0~255 整数），覆盖默认色。",
+      "units": null,
+      "interactions": [
+        "nargs=3",
+        "影响材质基色与光照耦合结果"
+      ],
+      "example": "--cinnabar 180 40 30",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--noise-low",
+      "aliases": [
+        "--noise-low"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "低频噪声强度（大尺度起伏）。",
+      "units": null,
+      "interactions": [
+        "与 --noise-mid/--noise-high 成组"
+      ],
+      "example": "--noise-low 0.4",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--noise-mid",
+      "aliases": [
+        "--noise-mid"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "中频噪声强度（主颗粒感）。",
+      "units": null,
+      "interactions": [],
+      "example": "--noise-mid 0.5",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--noise-high",
+      "aliases": [
+        "--noise-high"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "高频噪声强度（细砂感）。",
+      "units": null,
+      "interactions": [],
+      "example": "--noise-high 0.3",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--diffusion",
+      "aliases": [
+        "--diffusion"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "光扩散/柔化强度。",
+      "units": null,
+      "interactions": [
+        "越大阴影越软"
+      ],
+      "example": "--diffusion 1.2",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--oxidation",
+      "aliases": [
+        "--oxidation"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "氧化/做旧程度。",
+      "units": null,
+      "interactions": [],
+      "example": "--oxidation 0.35",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--shadow-strength",
+      "aliases": [
+        "--shadow-strength"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "阴影浓度（0=无影）。",
+      "units": null,
+      "interactions": [
+        "与 --light-level 一起决定画面明暗结构"
+      ],
+      "example": "--shadow-strength 0.8",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--material-coupling",
+      "aliases": [
+        "--material-coupling"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "字形随材质起伏的耦合强度（0=关闭）",
+      "hidden": false,
+      "semantics": "字形随墙面材质起伏的耦合强度（0=关闭）。",
+      "units": null,
+      "interactions": [
+        "值越大字越「融进」墙里"
+      ],
+      "example": "--material-coupling 0.6",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--exposure",
+      "aliases": [
+        "--exposure"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "画面曝光倍率",
+      "hidden": false,
+      "semantics": "画面曝光倍率（>1 更亮）。",
+      "units": null,
+      "interactions": [
+        "后期参数，不改变照明计算"
+      ],
+      "example": "--exposure 1.15",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "物理参数",
+      "flag": "--saturation",
+      "aliases": [
+        "--saturation"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "float",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "画面饱和度倍率",
+      "hidden": false,
+      "semantics": "画面饱和度倍率（1=原始）。",
+      "units": null,
+      "interactions": [],
+      "example": "--saturation 0.9",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "控制",
+      "flag": "--token",
+      "aliases": [
+        "--token"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "AI 服务令牌（仅 --ai 模式需要）。",
+      "units": null,
+      "interactions": [
+        "也可用环境变量 AGNES_API_TOKEN，或先写进配置"
+      ],
+      "example": "--token \"xxx\"",
+      "failure_modes": [
+        "缺失 → exit 1（需要 --token 或配置）"
+      ],
+      "choices_note": null
+    },
+    {
+      "group": "控制",
+      "flag": "--settings",
+      "aliases": [
+        "--settings"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "打开设置面板（交互式）。",
+      "units": null,
+      "interactions": [
+        "非交互终端会退化"
+      ],
+      "example": "--settings",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "控制",
+      "flag": "--no-color",
+      "aliases": [
+        "--no-color"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "禁用彩色输出",
+      "hidden": false,
+      "semantics": "关闭 ANSI 颜色（日志更易被程序解析）。",
+      "units": null,
+      "interactions": [
+        "等价环境变量 NO_COLOR=1",
+        "AI/CI 调用建议总是加"
+      ],
+      "example": "--no-color",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "控制",
+      "flag": "--yes",
+      "aliases": [
+        "-y",
+        "--yes"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "",
+      "units": null,
+      "interactions": [],
+      "example": null,
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "控制",
+      "flag": "--verbose",
+      "aliases": [
+        "-v",
+        "--verbose"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "",
+      "units": null,
+      "interactions": [],
+      "example": null,
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "控制",
+      "flag": "--log-level",
+      "aliases": [
+        "--log-level"
+      ],
+      "takes_value": true,
+      "metavar": null,
+      "type": "bool",
+      "choices": [
+        "DEBUG",
+        "ERROR",
+        "INFO",
+        "WARN"
+      ],
+      "nargs": null,
+      "default": null,
+      "help": "",
+      "hidden": false,
+      "semantics": "日志级别。",
+      "units": null,
+      "interactions": [
+        "覆盖 -v 的默认级别"
+      ],
+      "example": "--log-level DEBUG",
+      "failure_modes": [],
+      "choices_note": "DEBUG/INFO/WARN/ERROR"
+    },
+    {
+      "group": "控制",
+      "flag": "--log-file",
+      "aliases": [
+        "--log-file"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "把日志写入文件（默认 output/ 下）。",
+      "units": null,
+      "interactions": [
+        "配合 -v 便于事后排错"
+      ],
+      "example": "--log-file",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "控制",
+      "flag": "--dry-run",
+      "aliases": [
+        "--dry-run"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "演练：解析参数与配置，但不真正渲染/请求。",
+      "units": null,
+      "interactions": [
+        "用于排查参数",
+        "exit 0 不代表渲染可用"
+      ],
+      "example": "--dry-run",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "控制",
+      "flag": "--no-render",
+      "aliases": [
+        "--no-render"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "只做前置步骤（如生成/光照底图），跳过最终叠字与渲染。",
+      "units": null,
+      "interactions": [
+        "配合 --keep-lit 得到中间产物"
+      ],
+      "example": "--no-render --keep-lit",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "查询",
+      "flag": "--list-fonts",
+      "aliases": [
+        "--list-fonts"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "列出可用字体（名 → 路径）。",
+      "units": null,
+      "interactions": [
+        "只读查询，exit 0"
+      ],
+      "example": "--list-fonts --no-color",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "查询",
+      "flag": "--list-backgrounds",
+      "aliases": [
+        "--list-backgrounds"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "列出内置底图名。",
+      "units": null,
+      "interactions": [
+        "只读查询"
+      ],
+      "example": "--list-backgrounds --no-color",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "查询",
+      "flag": "--list-ntp",
+      "aliases": [
+        "--list-ntp"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "列出内置 NTP 服务器。",
+      "units": null,
+      "interactions": [
+        "只读查询"
+      ],
+      "example": "--list-ntp",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "查询",
+      "flag": "--list-services",
+      "aliases": [
+        "--list-services"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "列出内置 IP 定位服务。",
+      "units": null,
+      "interactions": [
+        "只读查询"
+      ],
+      "example": "--list-services",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "查询",
+      "flag": "--list-sizes",
+      "aliases": [
+        "--list-sizes"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "列出 (档位, 纵横比) → 像素 的完整映射。",
+      "units": null,
+      "interactions": [
+        "选 -r/-a 前查这里"
+      ],
+      "example": "--list-sizes",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "查询",
+      "flag": "--show-config",
+      "aliases": [
+        "--show-config"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "打印当前生效配置（含来源）。",
+      "units": null,
+      "interactions": [
+        "排错首选"
+      ],
+      "example": "--show-config",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "查询",
+      "flag": "--reset-config",
+      "aliases": [
+        "--reset-config"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "False",
+      "help": "",
+      "hidden": false,
+      "semantics": "恢复出厂配置。",
+      "units": null,
+      "interactions": [
+        "会写配置文件（破坏性）",
+        "建议先 --show-config 备份"
+      ],
+      "example": "--reset-config",
+      "failure_modes": [],
+      "choices_note": null
+    },
+    {
+      "group": "查询",
+      "flag": "--version",
+      "aliases": [
+        "--version"
+      ],
+      "takes_value": false,
+      "metavar": null,
+      "type": "bool",
+      "choices": null,
+      "nargs": 0,
+      "default": "==SUPPRESS==",
+      "help": "show program's version number and exit",
+      "hidden": false,
+      "semantics": "打印版本号后退出。",
+      "units": null,
+      "interactions": [
+        "argparse 内建 action=version"
+      ],
+      "example": "--version",
+      "failure_modes": [],
+      "choices_note": null
+    }
+  ],
+  "recipes": [
+    {
+      "desc": "最小可用（离线，无需网络/坐标）",
+      "cmd": "agnes-render --offline-bg 微水泥 -t \"字\" -y --no-color"
+    },
+    {
+      "desc": "确定性输出路径（推荐给自动化）",
+      "cmd": "agnes-render --offline-bg 微水泥 -t \"字\" -o /tmp/out --output-name cover -y --no-color"
+    },
+    {
+      "desc": "指定时间 + 坐标 + 天气（物理光照最准）",
+      "cmd": "agnes-render --offline-bg 微水泥 --time \"2024-06-21 12:00\" --lat 39.9042 --lon 116.4074 --weather clear -t \"字\" -y"
+    },
+    {
+      "desc": "固定随机种子做可复现实验",
+      "cmd": "agnes-render --offline-bg 微水泥 --seed 12345 --ssaa 1 -t \"字\" -y"
+    },
+    {
+      "desc": "只出光照底图（中间产物）",
+      "cmd": "agnes-render --offline-bg 微水泥 --keep-lit --no-render -y"
+    },
+    {
+      "desc": "列出可用资源（机器可解析）",
+      "cmd": "agnes-render --list-fonts --list-backgrounds --no-color"
+    },
+    {
+      "desc": "写定位缓存，后续 --gps 一键用",
+      "cmd": "agnes-render --set-location \"39.9042,116.4074,北京\""
+    },
+    {
+      "desc": "CI/容器里跑（无 TTY、无 locale）",
+      "cmd": "LC_ALL=C NO_COLOR=1 agnes-render --offline-bg 微水泥 -t \"字\" -y --no-color"
+    },
+    {
+      "desc": "Android/Termux 嵌入调用",
+      "cmd": "agnes-render --offline-bg 微水泥 -o /sdcard/Pictures -y --no-color   # 坐标用 --lat/--lon 或 --set-location"
+    }
+  ],
+  "failure_map": [
+    {
+      "symptom": "exit=2 且没有输出",
+      "cause": "参数名拼错 / choices 越界",
+      "fix": "agnes-render --help；或核对本文档的取值列"
+    },
+    {
+      "symptom": "提示「未在 background/ 找到底图」",
+      "cause": "底图名不对或素材目录不在便携根",
+      "fix": "agnes-render --list-backgrounds；必要时设 OWNRENDER_HOME"
+    },
+    {
+      "symptom": "「需要 --token 或配置」",
+      "cause": "--ai 模式没给令牌",
+      "fix": "--token 或 export AGNES_API_TOKEN，或改用 --offline-bg / -i"
+    },
+    {
+      "symptom": "「位置解析失败」",
+      "cause": "定位链全失败（无 GPS、无网、无坐标）",
+      "fix": "直接 --lat/--lon，或先 --set-location 写缓存"
+    },
+    {
+      "symptom": "等很久没有输出",
+      "cause": "非交互环境里在等确认",
+      "fix": "加 -y"
+    },
+    {
+      "symptom": "颜色转义污染日志",
+      "cause": "ANSI 颜色",
+      "fix": "--no-color 或 NO_COLOR=1"
+    },
+    {
+      "symptom": "容器里中文报编码错",
+      "cause": "locale 不是 UTF-8",
+      "fix": "LC_ALL=C 也能跑（已验证）；或设 PYTHONUTF8=1"
+    },
+    {
+      "symptom": "ImportError: libblas/libgfortran/libjpeg...",
+      "cause": "下载的二进制包缺系统库（打包问题）",
+      "fix": "重新下载最新 Release；打包脚本会用 DT_NEEDED 自动补系统库"
+    }
+  ]
+}

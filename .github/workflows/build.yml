@@ -7,6 +7,9 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # 每周一 04:00 UTC 自动重建一次：保证 nightly 不过期，也顺手做一次"每周体检"
+    - cron: '0 4 * * 1'
 
 permissions:
   contents: write
@@ -185,7 +188,9 @@ jobs:
     name: android-so (${{ matrix.abi }})
     runs-on: ubuntu-22.04
     timeout-minutes: 120
-    continue-on-error: true
+    # 以前这里是 continue-on-error: true，Android 的"包不完整"就这样被静默吞了。
+    # 现在 Android 已能通过验收，改成正常门禁：失败就是红。
+    # release 仍用 if: always() 照常发布其它平台（谁成功发谁），不会互相拖累。
     strategy:
       fail-fast: false
       matrix:
@@ -380,11 +385,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 生成 AI 参数文档（从 cli.py / config.py 内省，保证与代码一致）
+        run: |
+          python tools/gen_cli_doc.py
+          python tools/gen_cli_doc.py --check        # 再校验一次，不一致就红
+          ls -la docs/CLI-参数.ai.md docs/cli-args.json
+
       - name: 打包文档
         run: |
           zip -r OwnRender-docs.zip \
             README.md README.en.md LICENSE CREDITS.md docs tools
           ls -la OwnRender-docs.zip
+          unzip -l OwnRender-docs.zip | grep -E 'CLI-参数.ai.md|cli-args.json|verify_package|selftest_verify' 
       - uses: actions/upload-artifact@v4
         with:
           name: docs

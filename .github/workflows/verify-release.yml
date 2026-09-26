@@ -40,6 +40,8 @@ jobs:
           - { key: windows_arm64,  runner: windows-11-arm,  asset: 'OwnRender-windows-arm64.zip',     kind: win,     plat: windows, arch: arm64, soft: true }
           - { key: android_arm64_v8a,   runner: ubuntu-22.04, asset: 'OwnRender-android-arm64-v8a-so.zip',   kind: ziponly, plat: android, arch: arm64-v8a }
           - { key: android_armeabi_v7a, runner: ubuntu-22.04, asset: 'OwnRender-android-armeabi-v7a-so.zip', kind: ziponly, plat: android, arch: armeabi-v7a }
+          # 文档包也要验：别让文档缺页/参数文档过期悄悄发出去
+          - { key: docs_package,  runner: ubuntu-22.04,     asset: 'OwnRender-docs.zip',              kind: docs,    plat: docs,    arch: zip }
     steps:
       - uses: actions/checkout@v4
 
@@ -138,6 +140,54 @@ jobs:
           echo "验收退出码：$rc"
           exit $rc
 
+# ── 文档包：必须含参数文档与工具脚本，且参数文档与仓库一致 ──────
+      - name: 验收（文档包完整性）
+        if: matrix.kind == 'docs' && steps.dl.outputs.found == '1'
+        shell: bash
+        run: |
+          set -e
+          python - <<'PY'
+          import json, os, zipfile
+          key, out = "${{ matrix.key }}", os.path.join("out", "${{ matrix.key }}")
+          os.makedirs(out, exist_ok=True)
+          z = zipfile.ZipFile("dl/${{ matrix.asset }}")
+          names = z.namelist()
+          # 期望清单直接由仓库文件树推出（不写死），加文件/改名都不会漏
+          want_prefix = ("docs/", "tools/")
+          want_files = ("README.md", "README.en.md", "LICENSE", "CREDITS.md")
+          expect = []
+          for root, dirs, files in os.walk("."):
+              dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+              for f in files:
+                  p = os.path.relpath(os.path.join(root, f), ".")
+                  if p.startswith(want_prefix) or p in want_files:
+                      expect.append(p.replace(os.sep, "/"))
+          miss = sorted(p for p in expect if p not in names)
+          # 参数文档必须与仓库里的定义一致（把 zip 里的 JSON 与原文件比对）
+          same = None
+          if "docs/cli-args.json" in names:
+              same = z.read("docs/cli-args.json") == open("docs/cli-args.json", "rb").read()
+          problems = ["文档包缺少 %s" % m for m in miss[:20]]
+          if len(miss) > 20:
+              problems.append("…还有 %d 个文件缺失" % (len(miss) - 20))
+          if same is False:
+              problems.append("文档包里的 cli-args.json 与仓库版本不一致（参数文档过期）")
+          verdict = "PASS" if not problems else "FAIL"
+          json.dump({"platform": "docs", "arch": "zip", "verdict": verdict,
+                     "repo_expected": len(expect), "zip_files": len(names),
+                     "missing": miss[:50], "args_json_matches_repo": same,
+                     "problems": problems},
+                    open(os.path.join(out, "meta.json"), "w", encoding="utf-8"),
+                    ensure_ascii=False, indent=2)
+          open(os.path.join(out, "summary.txt"), "w", encoding="utf-8").write(
+              "平台/架构：docs/zip\n结论：%s\n仓库应有 %d 个文件 / zip 内 %d 个\n缺少：%s\n参数文档一致：%s\n"
+              % (verdict, len(expect), len(names), miss[:20] or "无", same))
+          print("结论：%s（仓库应有 %d / zip 内 %d）" % (verdict, len(expect), len(names)))
+          for p in problems:
+              print("  !! %s" % p)
+          raise SystemExit(0 if verdict == "PASS" else 1)
+          PY
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -146,11 +196,41 @@ jobs:
           retention-days: 30
 
   # ── 汇总：把各平台结论合成一张表 ──────────────────────────────
+  # ══════════════════════════════════════════════════════════════
+  # 工具链自测：不需要下载任何包，几秒跑完，专测"验收/打包逻辑本身"
+  # （ELF 32/64 位解析、链式补库、Windows 找 exe、Android 四种形态、
+  #   参数文档是否与代码一致）
+  # ══════════════════════════════════════════════════════════════
+  selftest:
+    name: selftest（工具链单测）
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 装最小依赖（config 需要 numpy）
+        run: |
+          pip install --quiet --upgrade pip
+          pip install --quiet numpy
+          python -c "import numpy; print('numpy', numpy.__version__)"
+
+      - name: 跑工具链自测
+        run: python tools/selftest_verify.py
+
+      - name: 参数文档与代码一致性
+        run: python tools/gen_cli_doc.py --check
+
   summary:
     name: verify-summary
-    needs: [verify]
+    needs: [verify, selftest]
     if: always()
     runs-on: ubuntu-latest
+    env:
+      SELFTEST_RESULT: ${{ needs.selftest.result }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -186,6 +266,12 @@ jobs:
                   "⚠️ " + (v.group(1) if v else "MISSING") + "（Release 里暂无此包）"))
               missing.append(key)
           body = ["# Release 验收结果", "",
+                  "- 工具链自测（selftest）：%s" % (
+                      "✅ 通过（ELF 解析 / 链式补库 / Windows 找 exe / "
+                      "Android 四形态 / 参数文档一致性）"
+                      if os.environ.get("SELFTEST_RESULT") == "success"
+                      else "❌ %s" % os.environ.get("SELFTEST_RESULT")),
+                  "",
                   "| 平台 | 架构 | artifact | 结论 |", "|---|---|---|---|"] + rows
           txt = "\n".join(body) + "\n"
           open("verify-summary.md", "w", encoding="utf-8").write(txt)
