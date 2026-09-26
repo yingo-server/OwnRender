@@ -89,69 +89,19 @@ jobs:
           retention-days: 14
 
   # ══════════════════════════════════════════════════════════════
-  # ② Linux 32 位：x86(i386)
-  #    armv7(armhf) 走 qemu 模拟，单个 job 要 40 分钟以上，
-  #    会拖住整条流水线，已拆到独立 workflow：build-armv7.yml
-  #    （它可以随时构建，并把包"追加"进同一个 Release）
+  # ②【已弃用】Linux 32 位（x86/i386 与 armv7/armhf）
+  #
+  #    弃用原因（详见 docs/二进制包.md「已弃用平台」）：
+  #    - x86(i386)：Debian 的 python3-numpy / python3-pil 链接的是系统库
+  #      （libblas/liblapack/libgfortran/libjpeg/libtiff/libwebp/... 共 30 个），
+  #      Nuitka standalone 不会带，实测需要额外补 22 MB 才能跑；
+  #      而 32 位 Linux 桌面/服务器如今基本绝迹，维护成本远大于收益。
+  #    - armv7(armhf)：GitHub 没有 arm32 runner，只能 qemu 全指令模拟编译，
+  #      单独一个 job 就要 40~80 分钟，且结果不稳定。
+  #
+  #    需要这两个架构的用户请自行构建（源码与打包脚本都在仓库里）：
+  #      python3 tools/build_nuitka.py --no-onefile --out dist --archive
   # ══════════════════════════════════════════════════════════════
-  linux-32bit:
-    name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.timeout }}
-    continue-on-error: ${{ matrix.soft }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: linux-x86,   image: debian:bookworm,         platform: 'linux/386',    timeout: 150, soft: false }
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: 准备 qemu（仅 armv7 需要）
-        if: matrix.platform == 'linux/arm/v7'
-        uses: docker/setup-qemu-action@v3
-
-      - name: 构建 + 冒烟测试（容器内完成，产物落在宿主 dist/）
-        run: |
-          docker run --rm --platform ${{ matrix.platform }} \
-            -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8 \
-            -e PYTHONUTF8=1 -e PYTHONIOENCODING=utf-8 \
-            -v "$PWD:/src" -w /src \
-            ${{ matrix.image }} bash -lc '
-              set -e
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update -qq
-              apt-get install -y -qq --no-install-recommends \
-                python3 python3-venv python3-numpy python3-pil python3-requests \
-                python3-dev gcc binutils patchelf
-              python3 -m venv --system-site-packages /venv
-              /venv/bin/pip install -q --upgrade pip
-              /venv/bin/pip install -q nuitka
-              echo "== 容器内 Python:"; /venv/bin/python -V; uname -m
-              /venv/bin/python -m compileall -q .
-              /venv/bin/python tools/build_nuitka.py --no-onefile --out dist --archive \
-                --name "OwnRender-${{ matrix.name }}"
-              DIR=$(ls -d dist/OwnRender-* 2>/dev/null | head -1)
-              if [ -z "$DIR" ]; then
-                DIR=$(find dist -mindepth 1 -maxdepth 1 -type d ! -name "*.build" ! -name "*.dist" | head -1)
-              fi
-              if [ -z "$DIR" ]; then echo "找不到产物目录"; ls -la dist; exit 1; fi
-              echo "== 冒烟测试: $DIR"
-              "$DIR/ownrender" --version
-              "$DIR/ownrender" --list-backgrounds --no-color | head -3
-              "$DIR/ownrender" --offline-bg 微水泥 --ssaa 1 --text "构建自检" -y --no-color
-              ls -la output/ | tail -3
-            '
-          ls -la dist/
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.name }}
-          path: |
-            dist/*.tar.gz
-            dist/*.zip
-          if-no-files-found: error
-          retention-days: 14
 
   # ══════════════════════════════════════════════════════════════
   # ③ Windows：x86_64 / x86(32位) / arm64
@@ -382,7 +332,7 @@ jobs:
     name: release
     # 等所有平台 job 结束（不论成败）再收集产物发布；谁成功收谁。
     # Release 固定用同一 nightly 标签滚动更新，重跑本 job 即可追加/覆盖资产。
-    needs: [docs, linux-native, linux-32bit, windows, android]
+    needs: [docs, linux-native, windows, android]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -422,6 +372,29 @@ jobs:
               case "$f" in *docs*) continue ;; esac
               echo "| \`$(basename "$f")\` | $(basename "$f" | sed -E 's/^OwnRender-([A-Za-z0-9_]+-[A-Za-z0-9_]+).*/\1/') |"
             done
+            echo
+            echo "## ⚠️ 已弃用平台（不再提供二进制，请自行构建）"
+            echo
+            echo "| 平台/架构 | 弃用原因 |"
+            echo "|---|---|"
+            echo "| \`linux-x86\`（32 位 x86 / i386） | 32 位 Linux 桌面与服务器已基本绝迹；且 Debian 的 \`python3-numpy\`/\`python3-pil\` 链接的是系统库（libblas / liblapack / libgfortran / libjpeg / libtiff / libwebp / libfreetype … 共 30 个），Nuitka standalone 不会自动带，实测要额外补 22 MB 才能跑，维护成本远大于收益 |"
+            echo "| \`linux-armv7\`（32 位 ARM / armhf） | GitHub 没有 arm32 runner，只能靠 qemu 全指令模拟编译，单个任务要 40~80 分钟且结果不稳定（32 位树莓派等设备） |"
+            echo
+            echo "这两个架构的**源码与打包脚本都在仓库里**，可自行构建（需要 32 位 Python 环境）："
+            echo
+            echo '```bash'
+            echo "python3 tools/build_nuitka.py --no-onefile --out dist --archive"
+            echo "# 交叉/模拟（以 armv7 为例）"
+            echo "docker run --rm --platform linux/arm/v7 -v \"\$PWD:/src\" -w /src \\"
+            echo "  arm32v7/debian:bookworm bash -lc 'apt-get update -qq && \\"
+            echo "    apt-get install -y -qq python3 python3-venv python3-numpy python3-pil \\"
+            echo "      python3-dev gcc patchelf && \\"
+            echo "    python3 -m venv /v && /v/bin/pip install nuitka && \\"
+            echo "    /v/bin/python tools/build_nuitka.py --no-onefile --out dist --archive'"
+            echo '```'
+            echo
+            echo "（打包脚本会自动读取 ELF 的 \`DT_NEEDED\`，把包内缺失的系统库补进包根，"
+            echo "所以自建时通常不需要手工处理依赖。）"
             echo
             echo "## 使用方式"
             echo

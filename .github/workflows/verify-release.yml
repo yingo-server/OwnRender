@@ -4,8 +4,7 @@ name: Verify Release
 # → 每个平台的输出按 平台_架构 上传为可下载 artifact（test_<平台>_<架构>）
 on:
   workflow_run:
-    # 主构建完成 → 复验；armv7 独立构建完成（它会把包追加进同一个 Release）→ 也复验
-    workflows: ["Build & Release", "Build armv7 (standalone)"]
+    workflows: ["Build & Release"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -33,9 +32,9 @@ jobs:
       matrix:
         include:
           - { key: linux_x86_64,  runner: ubuntu-22.04,     asset: 'OwnRender-linux-x86_64.tar.gz',   kind: native,  plat: linux, arch: x86_64 }
-          - { key: linux_x86,     runner: ubuntu-22.04,     asset: 'OwnRender-linux-x86.tar.gz',      kind: docker,  plat: linux, arch: x86,     image: 'i386/debian:bookworm', platform: 'linux/386' }
+          # linux_x86(i386) 与 linux_armv7(armhf) 已弃用，不再产出、也不再验收
+          # （原因见 docs/二进制包.md「已弃用平台」）
           - { key: linux_aarch64, runner: ubuntu-24.04-arm, asset: 'OwnRender-linux-aarch64.tar.gz',  kind: native,  plat: linux, arch: aarch64 }
-          - { key: linux_armv7,   runner: ubuntu-22.04,     asset: 'OwnRender-linux-armv7.tar.gz',    kind: docker,  plat: linux, arch: armv7l,  image: 'arm32v7/debian:bookworm', platform: 'linux/arm/v7', soft: true }
           - { key: windows_x86_64, runner: windows-latest,  asset: 'OwnRender-windows-x86_64.zip',    kind: win,     plat: windows, arch: amd64 }
           - { key: windows_x86,    runner: windows-latest,  asset: 'OwnRender-windows-x86.zip',       kind: win,     plat: windows, arch: x86 }
           - { key: windows_arm64,  runner: windows-11-arm,  asset: 'OwnRender-windows-arm64.zip',     kind: win,     plat: windows, arch: arm64, soft: true }
