@@ -196,18 +196,33 @@ def _verify_android(a):
             "assets": sum(1 for n in an if n.startswith("assets/")),
             "plain_hits": {w: sum(1 for n in an if w in n.lower()) for w in want},
         }
-        # 内嵌归档（assets/*.tar|.zip|.tgz、lib/*/libpybundle.so …）里再找一层
+        # 内嵌归档：lib/ 下的 .so 与 assets/ 下的**所有文件**都试一遍
+        # （p4a 的 bundle 未必带 .tar/.zip 后缀，只看后缀会漏）
         nested = {}
-        cands = [n for n in an
-                 if n.endswith(".so") and "pybundle" in n
-                 or (n.startswith("assets/") and n.endswith((".tar", ".zip", ".tgz", ".gz")))]
-        for n in cands[:12]:
+        cands = []
+        for n in an:
+            if n.endswith("/"):
+                continue
+            if n.startswith("lib/") and n.endswith(".so"):
+                cands.append(n)
+            elif n.startswith("assets/"):
+                cands.append(n)
+        cands = cands[:20]
+        apk["candidates"] = cands
+        scanned = []
+        for n in cands:
             try:
-                got = _scan_archive(n, az.read(n), want)
-                for (w, where), c in got.items():
-                    nested["%s@%s" % (w, where)] = c
-            except Exception as e:
-                notes.append("扫描 %s 失败：%s" % (n, e))
+                blob = az.read(n)
+            except Exception:
+                continue
+            if len(blob) > 60 * 1024 * 1024:      # 太大就不深挖，避免慢
+                continue
+            got = _scan_archive(n, blob, want)
+            if got:
+                scanned.append("%s(%d)" % (n, len(blob)))
+            for (w, where), c in got.items():
+                nested["%s@%s" % (w, where)] = c
+        apk["scanned_archives"] = scanned
         apk["nested_hits"] = nested
         hit_numpy = apk["plain_hits"]["numpy"] or apk["plain_hits"]["_multiarray"] \
             or any(k.startswith(("numpy", "_multiarray")) for k in nested)
