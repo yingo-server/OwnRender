@@ -24,6 +24,7 @@ import argparse
 import os
 import platform
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -251,19 +252,114 @@ def _find_system_lib(soname: str):
     return None
 
 
-def _bundle_system_libs(dest: Path) -> None:
-    """把包内 ELF 依赖的、系统里才有的共享库补进便携目录。
+# 必须由目标机器提供的库：glibc 家族（跟宿主 ld.so 强绑定）与
+# 显卡/窗口/驱动栈（跟宿主驱动强绑定）。这些打进包里不仅没用，还可能炸。
+SYSTEM_ONLY = (
+    "ld-linux", "ld-2.", "ld.so", "libc.so", "libc-2.", "libm.so", "libm-2.",
+    "libdl.so", "libpthread", "librt.so", "libresolv", "libutil.so",
+    "libnsl.so", "libcrypt.so", "libanl.so", "libmvec.so", "libthread_db.so",
+    "libGL", "libEGL", "libGLX", "libOpenGL", "libGLdispatch", "libGLESv",
+    "libdrm.so", "libgbm.so", "libvulkan", "libnvidia", "libcuda.so",
+    "libX11", "libxcb", "libwayland", "libxkbcommon", "libICE.so", "libSM.so",
+)
 
-    为什么需要：某些发行版的 python3-numpy 链接系统 BLAS（libblas.so.3），
-    这是"系统库"而非 Python 扩展，Nuitka standalone 不会带；
-    构建容器恰好装了它 → 冒烟测试通过，用户机器上却 ImportError。
-    做法：反复 ldd 找出 "not found"，把库复制到包根（Nuitka 的 RPATH
-    是 $ORIGIN 系，包根即可命中），最多 4 轮，最后再验证一次。
+_PT_LOAD, _PT_DYNAMIC = 1, 2
+
+
+def _is_system_only(soname: str) -> bool:
+    return any(soname.startswith(p) for p in SYSTEM_ONLY)
+
+
+def _elf_needed(path):
+    """读 ELF 的 DT_NEEDED（纯 Python 解析动态段，不依赖 binutils）。
+
+    为什么不用 ldd：ldd 是在"当前机器"上解析，构建容器恰好装了某个库时，
+    就永远看不出它没被打进包——libblas.so.3 就是这么漏过去的。
+    DT_NEEDED 是文件里的静态信息，与构建机装了什么无关，才靠得住。
     """
     if IS_WIN:
-        return
-    if not shutil.which("ldd"):
-        print("== 跳过系统库补全：本机没有 ldd")
+        return []
+    try:
+        data = path.read_bytes()
+    except Exception:
+        return []
+    if len(data) < 64 or data[:4] != b"\x7fELF":
+        return []
+    is64 = data[4] == 2
+    end = "<" if data[5] == 1 else ">"
+    try:
+        if is64:
+            e_phoff, = struct.unpack_from(end + "Q", data, 0x20)
+            e_phentsize, e_phnum = struct.unpack_from(end + "HH", data, 0x36)
+        else:
+            e_phoff, = struct.unpack_from(end + "I", data, 0x1c)
+            e_phentsize, e_phnum = struct.unpack_from(end + "HH", data, 0x2a)
+        loads, dyn = [], None
+        for i in range(e_phnum):
+            off = e_phoff + i * e_phentsize
+            if off + e_phentsize > len(data):
+                break
+            p_type, = struct.unpack_from(end + "I", data, off)
+            if is64:
+                p_offset, p_vaddr, _pp, p_filesz = struct.unpack_from(end + "QQQQ", data, off + 8)
+            else:
+                _ptype, p_offset, p_vaddr, _pp, p_filesz = struct.unpack_from(
+                    end + "IIIII", data, off)
+            if p_type == _PT_LOAD:
+                loads.append((p_vaddr, p_filesz, p_offset))
+            elif p_type == _PT_DYNAMIC:
+                dyn = (p_offset, p_filesz)
+        if not dyn:
+            return []
+
+        def v2o(addr):
+            for vaddr, filesz, offset in loads:
+                if vaddr <= addr < vaddr + filesz:
+                    return offset + (addr - vaddr)
+            return None
+
+        entsz = 16 if is64 else 8
+        fmt = end + ("QQ" if is64 else "II")
+        strtab = strsz = None
+        idxs = []
+        o, sz = dyn
+        for pos in range(o, min(o + sz, len(data) - entsz + 1), entsz):
+            tag, val = struct.unpack_from(fmt, data, pos)
+            if tag == 0:
+                break
+            if tag == 5:
+                strtab = val
+            elif tag == 10:
+                strsz = val
+            elif tag == 1:
+                idxs.append(val)
+        if strtab is None or strsz is None or not idxs:
+            return []
+        base = v2o(strtab)
+        if base is None:
+            return []
+        blob = data[base:base + strsz]
+        out = []
+        for i in idxs:
+            e = blob.find(b"\x00", i)
+            out.append(blob[i:e if e >= 0 else len(blob)].decode("utf-8", "replace"))
+        return out
+    except Exception as exc:
+        print(f"   ! 读 {path.name} 的 DT_NEEDED 失败：{exc}")
+        return []
+
+
+def _bundle_system_libs(dest: Path) -> None:
+    """把包内 ELF 需要、但包里没有的共享库补进便携目录。
+
+    为什么需要：某些发行版的 python3-numpy 链接系统 BLAS（libblas.so.3），
+    它属于"系统库"而非 Python 扩展，Nuitka standalone 不会带；
+    构建容器恰好装了它 → 冒烟测试照样通过，用户机器上却 ImportError。
+    做法：按 DT_NEEDED 找出"包内没有、且不属于 glibc/显卡家族"的 soname，
+    从系统复制到包根（Nuitka 的 RPATH 是 $ORIGIN 系，包根即可命中），
+    最多 4 轮直到依赖闭合，最后复查一次。
+    """
+    if IS_WIN:
         return
 
     def elf_files():
@@ -271,31 +367,23 @@ def _bundle_system_libs(dest: Path) -> None:
             if p.is_file() and (p.name == EXE or ".so" in p.name):
                 yield p
 
-    # 包内已有的文件名集合。Nuitka 把 RPATH/RUNPATH 设在主程序上，
-    # 单独 ldd 某个 .so 时，"包内其实已有"的库也会被报成 not found；
-    # 用它过滤掉这种假阳性（真缺的库不会出现在包内）。
-    present = {p.name for p in dest.rglob("*") if p.is_file()}
+    def missing_now():
+        """包内 ELF 需要、包里却没有、且不该由系统提供的 soname。"""
+        present = {q.name for q in dest.rglob("*") if q.is_file()}
+        out = {}
+        for p in elf_files():
+            for so in _elf_needed(p):
+                if so in present or _is_system_only(so):
+                    continue
+                out.setdefault(so, p)
+        return out
 
     added = {}
     for rnd in range(4):
-        missing = {}
-        for p in elf_files():
-            try:
-                r = subprocess.run(["ldd", str(p)], capture_output=True, text=True,
-                                   timeout=120)
-            except Exception:
-                continue
-            for line in r.stdout.splitlines():
-                line = line.strip()
-                if "=> not found" not in line:
-                    continue
-                soname = line.split("=>", 1)[0].strip()
-                if soname:
-                    missing.setdefault(soname, p)
-        missing = {k: v for k, v in missing.items() if k not in present}
+        missing = missing_now()
         if not missing:
             break
-        print(f"== 系统库补全 第{rnd + 1}轮：缺 {len(missing)} 个 {sorted(missing)[:8]}")
+        print(f"== 系统库补全 第{rnd + 1}轮：缺 {len(missing)} 个 {sorted(missing)[:10]}")
         gone = True
         for soname, holder in missing.items():
             src = _find_system_lib(soname)
@@ -308,28 +396,17 @@ def _bundle_system_libs(dest: Path) -> None:
                 shutil.copy2(src, dst)
                 os.chmod(dst, 0o755)
                 added[soname] = src
-                present.add(soname)
         if gone:
             break
 
-    # 验证
-    left = {}
-    for p in elf_files():
-        try:
-            r = subprocess.run(["ldd", str(p)], capture_output=True, text=True, timeout=120)
-        except Exception:
-            continue
-        for line in r.stdout.splitlines():
-            if "=> not found" in line:
-                so = line.split("=>", 1)[0].strip()
-                if so and so not in present:
-                    left.setdefault(so, p.name)
+    left = missing_now()
     if added:
-        print(f"== 已补入 {len(added)} 个系统库：{sorted(added)}")
+        tot = sum((dest / k).stat().st_size for k in added) / 1048576
+        print(f"== 已补入 {len(added)} 个系统库（{tot:.1f} MB）：{sorted(added)}")
     if left:
         print(f"   ! 仍有未解析依赖：{sorted(left)} —— 该包在干净系统上可能跑不起来")
     else:
-        print("== 自包含检查通过：包内 ELF 无未解析依赖")
+        print("== 自包含检查通过：包内 ELF 无未解析依赖（glibc 家族除外）")
 
 
 def assemble(out: Path, name: str, onefile: bool) -> Path:

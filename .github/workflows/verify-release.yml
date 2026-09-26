@@ -4,7 +4,8 @@ name: Verify Release
 # → 每个平台的输出按 平台_架构 上传为可下载 artifact（test_<平台>_<架构>）
 on:
   workflow_run:
-    workflows: ["Build & Release"]
+    # 主构建完成 → 复验；armv7 独立构建完成（它会把包追加进同一个 Release）→ 也复验
+    workflows: ["Build & Release", "Build armv7 (standalone)"]
     types: [completed]
   workflow_dispatch:
     inputs:
