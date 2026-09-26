@@ -20,9 +20,7 @@ import base64
 import threading
 import time
 from pathlib import Path
-
 import numpy as np
-import requests
 from PIL import Image
 
 import config
@@ -64,7 +62,7 @@ def call_agnes_api(token, prompt, size):
     t = threading.Thread(target=tick, daemon=True)
     t.start()
     t0 = time.time()
-
+    import requests              # 延迟导入：缺 requests 时给出人话错误
     try:
         r = requests.post(config.AGNES_API_URL, headers=headers,
                           json=payload, timeout=300)
