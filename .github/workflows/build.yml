@@ -189,15 +189,31 @@ jobs:
   # ══════════════════════════════════════════════════════════════
   release:
     name: release
-    needs: [desktop, docs]
-    # 不等 Intel mac（macos-13 常年排队）：只要文档与核心构建有产物就先发布，
-    # 缺哪个平台就少哪个包，下一次构建补齐。
+    # 不把桌面矩阵整体设为依赖：macos-13(Intel) 常年排队，会把这步永远卡住。
+    # 只依赖 docs（秒级完成），进来后有限等待其它平台，Intel 到不了就少发一个包。
+    needs: [docs]
     if: always() && github.event_name != 'pull_request' && needs.docs.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: 等其它平台构建（最多 12 分钟，不含 Intel mac）
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for i in $(seq 1 24); do
+            pending=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
+              --jq '[.jobs[] | select(.status != "completed")
+                     | select(.name | test("macos-x86_64|release") | not)] | length' \
+              2>/dev/null || echo 0)
+            echo "[$i/24] 未完成平台数：$pending"
+            [ "$pending" = "0" ] && break
+            sleep 30
+          done
 
       - uses: actions/download-artifact@v4
         with:
