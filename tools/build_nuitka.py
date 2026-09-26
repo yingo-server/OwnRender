@@ -384,19 +384,21 @@ def _bundle_system_libs(dest: Path) -> None:
         if not missing:
             break
         print(f"== 系统库补全 第{rnd + 1}轮：缺 {len(missing)} 个 {sorted(missing)[:10]}")
-        gone = True
+        # 关键：本轮"补进了新库"就要再跑一轮 —— 新补进来的库自己也带依赖，
+        # 必须递归补齐（libblas.so.3 → libgfortran.so.5 就是这么漏的）。
+        progress = False
         for soname, holder in missing.items():
             src = _find_system_lib(soname)
             if not src:
                 print(f"   ! 系统里也找不到 {soname}（{holder.name} 需要）")
-                gone = False
                 continue
             dst = dest / soname
             if not dst.exists():
                 shutil.copy2(src, dst)
                 os.chmod(dst, 0o755)
                 added[soname] = src
-        if gone:
+                progress = True
+        if not progress:
             break
 
     left = missing_now()
