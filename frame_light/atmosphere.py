@@ -42,10 +42,11 @@ from . import astro
 EYE_ADAPT_GAMMA = 0.40      # 视觉适应指数（Stevens 幂律；文献 0.33~0.5）
 TAU_CLOUD_THICK = 3.0       # 厚云光学厚度 → 直射透过率 e^-3 ≈ 5%
 WATER_FILM_REF_MM = 0.50    # 降水率到这个值，表面水膜接近全覆盖
-GROUND_ALBEDO = {           # 地面反照率（材料常数，不是风格参数）
-    "snow": 0.80,
-    "wet":  0.07,
-    "dry":  0.25,
+GROUND_ALBEDO = {           # 地面/室内反照率（材料常数，不是风格参数）
+    "snow": 0.80,           # 积雪
+    "wet":  0.07,           # 湿沥青/湿地
+    "dry":  0.25,           # 干燥地面
+    "room": 0.55,           # 室内平均反射率（白灰墙面+水泥地）
 }
 TONE_S_CURVE_GAIN = 0.30    # 光硬度 → 对比度：contrast = 1 − gain·(1−hard)
 
@@ -146,34 +147,52 @@ def airlight_fraction(vis_m: float, path_m: float) -> float:
     return _clamp(1.0 - math.exp(-beta * max(0.0, float(path_m))))
 
 
-def aperture_illuminance(P, scene, valid):
-    """窗口作为**面光源**在墙面上产生的相对照度场（纯几何，无手调参数）。
+def aperture_illuminance(P, scene, valid, samples_y=5, samples_z=4):
+    """窗口开口的照度场 —— **把窗户当矩形面光源做面积分**。
 
-    物理：有限面积光源的照度
-        E ∝ A_win · cosθ_win · cosθ_wall / r²
-    其中 r 是墙点到窗中心的距离，两个 cos 是窗面法线与墙面法线的夹角余弦。
+    物理：有限大面光源对墙点的照度
+        E(P) = ∫∫_窗面  L · cosθ_win · cosθ_wall / r²  dA
+    这里在窗面上按 samples_y × samples_z 采样求和近似积分。
 
-    这是"靠窗亮、离窗暗"的来源。
-    旧实现里环境光是全图一个常数 → 阴天（没有光斑）整张图是一块平灰，
-    实测动态范围被压到 0.224~0.444。
+    ⚠ 为什么不能用"窗心单点"：单点等价于点光源，1/r² 衰减过陡，
+    会把照度场做成"以窗心为圆心的径向光晕"；而真实窗户是扩展光源，
+    照度场是**沿离窗方向缓慢下降的软场**（像柔光箱）。
     """
     y0, y1, z0, z1 = scene.win_bbox
-    cy = 0.5 * (y0 + y1)          # 窗中心 y
-    cz = 0.5 * (z0 + z1)          # 窗中心 z
+    wx = float(getattr(scene, "win_x", 0.0))
 
-    dx = float(getattr(scene, "win_x", 0.0)) - P[..., 0]   # 到窗面（±X 平面）
-    dy = cy - P[..., 1]
-    dz = cz - P[..., 2]
-    r2 = dx * dx + dy * dy + dz * dz
-    r = np.sqrt(np.maximum(r2, 1e-6))
+    py = (np.linspace(y0, y1, samples_y))[:, None]
+    pz = (np.linspace(z0, z1, samples_z))[None, :]
+    dA = ((y1 - y0) * (z1 - z0) / float(samples_y * samples_z))
 
-    area = max(1e-6, (y1 - y0) * (z1 - z0))                 # 窗面积
-    cos_win = np.abs(dx) / r                                # 窗面法线 · 视线
-    cos_wall = np.abs(dz) / r                               # 墙面法线 · 视线
-    e = area * cos_win * cos_wall / r2
+    e = np.zeros(P.shape[:2], dtype=np.float32)
+    dx_w = wx - P[..., 0]
+    for i in range(samples_y):
+        for j in range(samples_z):
+            dy = float(py[i, 0]) - P[..., 1]
+            dz = float(pz[0, j]) - P[..., 2]
+            r2 = dx_w * dx_w + dy * dy + dz * dz
+            r = np.sqrt(np.maximum(r2, 1e-6))
+            cos_win = np.abs(dx_w) / r          # 窗面法线（±X）· 视线
+            cos_wall = np.abs(dz) / r           # 墙面法线（+Z）· 视线
+            e += (dA * cos_win * cos_wall / r2).astype(np.float32)
+
     e = np.where(valid, e, 0.0)
     m = float(e[valid].mean()) if bool(valid.any()) else float(e.mean())
     return e / max(m, 1e-12)
+
+
+def interreflection_floor(room_albedo=None) -> float:
+    """室内多次互反射的"均匀底"（相对窗口直入分量的比例）。
+
+    ρ=0.55 的白灰房间：光在墙面/地面之间反复弹，弹无穷次等比求和
+        k = ρ/(1-ρ) ≈ 1.22
+    这一项是**全房间近似均匀**的 —— 这就是"天空主导时几乎铺满整个房间"
+    的原因：房间亮不亮，很大程度取决于这层互反射底，而不是窗口正对的那块。
+    """
+    rho = GROUND_ALBEDO["room"] if room_albedo is None else float(room_albedo)
+    rho = _clamp(rho, 0.0, 0.95)
+    return rho / max(1e-6, 1.0 - rho)
 
 
 # ═══════════════════════════════════════════════════════════════════
