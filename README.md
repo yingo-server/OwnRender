@@ -257,4 +257,4 @@ Copyright (C) 2025 yingo-server and OwnRender contributors
 <!-- binaries-link -->
 ---
 
-📦 **二进制包**（Windows / Linux / macOS / Android `.so`，由 CI 用 Nuitka 自动构建）—— **下载与使用方式 → [docs/二进制包.md](docs/二进制包.md)**
+📦 **二进制包**（Windows / Linux / Android `.so`；按 CPU 架构分 x86 / x86_64 / arm64 / armv7，由 CI 用 Nuitka 自动构建）—— **下载与使用方式 → [docs/二进制包.md](docs/二进制包.md)**

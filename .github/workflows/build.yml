@@ -24,9 +24,9 @@ env:
 
 jobs:
   # ══════════════════════════════════════════════════════════════
-  # ① 桌面三平台：Windows / Linux / macOS（Nuitka 打包）
+  # ① Linux 原生架构：x86_64 / aarch64
   # ══════════════════════════════════════════════════════════════
-  desktop:
+  linux-native:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -36,8 +36,6 @@ jobs:
         include:
           - { os: ubuntu-22.04,    name: linux-x86_64 }
           - { os: ubuntu-24.04-arm, name: linux-aarch64 }
-          - { os: windows-latest,  name: windows-x86_64 }
-          - { os: macos-14,        name: macos-aarch64 }
     steps:
       - uses: actions/checkout@v4
 
@@ -60,7 +58,7 @@ jobs:
 
       - name: Nuitka 打包
         shell: bash
-        run: python tools/build_nuitka.py --no-onefile --out dist --archive
+        run: python tools/build_nuitka.py --no-onefile --out dist --archive --name "${{ matrix.name }}"
 
       - name: 冒烟测试（二进制必须能独立跑）
         shell: bash
@@ -68,18 +66,15 @@ jobs:
           set -e
           DIR=$(ls -d dist/OwnRender-* | head -1)
           BIN="$DIR/ownrender"
-          [ -f "$DIR/ownrender.exe" ] && BIN="$DIR/ownrender.exe"
           echo "== 二进制: $BIN"
           "$BIN" --version
           "$BIN" --list-backgrounds --no-color | head -3
-          # 全链路：真渲染一张（验证 numpy/Pillow/字体/素材都在包里可用）
           "$BIN" --offline-bg 微水泥 --time "2025-06-21T09:00:00+08:00" \
                  --lat 39.9042 --lon 116.4074 --weather clear \
                  --ssaa 2 --text "构建自检" -y --no-color
           ls -la output/ | tail -3
 
-      - name: 上传产物
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: |
@@ -89,15 +84,146 @@ jobs:
           retention-days: 14
 
   # ══════════════════════════════════════════════════════════════
-  # ② Android：产出台 .so（宿主 App 以 JNI / 参数模式调用）
+  # ② Linux 32 位：x86(i386) / armv7(armhf)
+  #    x86 走原生 386 容器；armv7 走 qemu 模拟（慢，失败不阻塞发布）
+  # ══════════════════════════════════════════════════════════════
+  linux-32bit:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    continue-on-error: ${{ matrix.soft }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86,    image: debian:bookworm,          platform: 'linux/386',    timeout: 150, soft: false }
+          - { name: linux-armv7,  image: arm32v7/debian:bookworm,  platform: 'linux/arm/v7', timeout: 330, soft: true }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 qemu（仅 armv7 需要）
+        if: matrix.platform == 'linux/arm/v7'
+        uses: docker/setup-qemu-action@v3
+
+      - name: 构建 + 冒烟测试（容器内完成，产物落在宿主 dist/）
+        run: |
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v "$PWD:/src" -w /src \
+            ${{ matrix.image }} bash -lc '
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends \
+                python3 python3-venv python3-numpy python3-pil python3-requests \
+                python3-dev gcc binutils patchelf
+              python3 -m venv --system-site-packages /venv
+              /venv/bin/pip install -q --upgrade pip
+              /venv/bin/pip install -q nuitka
+              echo "== 容器内 Python:"; /venv/bin/python -V; uname -m
+              /venv/bin/python -m compileall -q .
+              /venv/bin/python tools/build_nuitka.py --no-onefile --out dist --archive \
+                --name "${{ matrix.name }}"
+              DIR=$(ls -d dist/OwnRender-* | head -1)
+              echo "== 冒烟测试: $DIR"
+              "$DIR/ownrender" --version
+              "$DIR/ownrender" --list-backgrounds --no-color | head -3
+              "$DIR/ownrender" --offline-bg 微水泥 --ssaa 1 --text "构建自检" -y --no-color
+              ls -la output/ | tail -3
+            '
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # ══════════════════════════════════════════════════════════════
+  # ③ Windows：x86_64 / x86(32位) / arm64
+  #    32 位用 32 位 Python 解释器跑 Nuitka，产出的就是 32 位 exe
+  # ══════════════════════════════════════════════════════════════
+  windows:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    continue-on-error: ${{ matrix.soft }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest,  name: windows-x86_64, arch: x64,   soft: false }
+          - { os: windows-latest,  name: windows-x86,    arch: x86,   soft: false }
+          - { os: windows-11-arm,  name: windows-arm64,  arch: arm64, soft: true }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: ${{ matrix.arch }}
+
+      - name: 安装依赖
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          # 优先最新版；32 位/arm64 上若没有对应 wheel，回退到仍有该架构 wheel 的版本
+          pip install numpy Pillow requests nuitka \
+            || pip install "numpy<2" "Pillow<11" requests nuitka
+
+      - name: 确认解释器位数
+        shell: bash
+        run: python -c "import platform,struct;print(platform.machine(), struct.calcsize('P')*8, 'bit')"
+
+      - name: 源码自检（打包前）
+        shell: bash
+        run: |
+          python -m compileall -q .
+          python main.py --list-backgrounds --no-color | head -5
+          python main.py --version
+
+      - name: Nuitka 打包
+        shell: bash
+        run: python tools/build_nuitka.py --no-onefile --out dist --archive --name "${{ matrix.name }}"
+
+      - name: 冒烟测试（二进制必须能独立跑）
+        shell: bash
+        run: |
+          set -e
+          DIR=$(ls -d dist/OwnRender-* | head -1)
+          BIN="$DIR/ownrender.exe"
+          echo "== 二进制: $BIN"
+          "$BIN" --version
+          "$BIN" --list-backgrounds --no-color | head -3
+          "$BIN" --offline-bg 微水泥 --time "2025-06-21T09:00:00+08:00" \
+                 --lat 39.9042 --lon 116.4074 --weather clear \
+                 --ssaa 2 --text "构建自检" -y --no-color
+          ls -la output/ | tail -3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # ══════════════════════════════════════════════════════════════
+  # ④ Android：x86(NULL) 不需要；产 arm64-v8a / armeabi-v7a 两套 .so
   #    用 python-for-android 构建，从 APK 中提取 lib/*/*.so
   # ══════════════════════════════════════════════════════════════
   android:
-    name: android-so (arm64-v8a)
+    name: android-so (${{ matrix.abi }})
     runs-on: ubuntu-22.04
-    # p4a 打包 numpy 较慢，给足时间；失败不影响其它平台与发布
-    timeout-minutes: 60
+    timeout-minutes: 120
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
     steps:
       - uses: actions/checkout@v4
 
@@ -127,10 +253,10 @@ jobs:
           ANDROIDNDKVER: 25.2.9519653
         run: |
           p4a create \
-            --dist-name ownrender \
+            --dist-name ownrender-${{ matrix.abi }} \
             --bootstrap service_only \
             --requirements python3,numpy,pillow,requests \
-            --arch arm64-v8a \
+            --arch ${{ matrix.abi }} \
             --sdk-dir "$ANDROID_HOME" \
             --ndk-dir "$ANDROID_HOME/ndk/25.2.9519653"
 
@@ -138,7 +264,7 @@ jobs:
         run: |
           # 该版本生成的 dists/*/build.py 引用了 apk 阶段并未定义的 --orientation，
           # 打包时会 AttributeError: 'Namespace' object has no attribute 'orientation'
-          F="$HOME/.local/share/python-for-android/dists/ownrender/build.py"
+          F="$HOME/.local/share/python-for-android/dists/ownrender-${{ matrix.abi }}/build.py"
           ls -la "$F"
           python - "$F" <<'PY'
           import io, sys
@@ -166,43 +292,43 @@ jobs:
             --version "$APPVER" \
             --bootstrap service_only \
             --requirements python3,numpy,pillow,requests \
-            --arch arm64-v8a \
-            --dist-name ownrender \
+            --arch ${{ matrix.abi }} \
+            --dist-name ownrender-${{ matrix.abi }} \
             --android-api 33 \
             --sdk-dir "$ANDROID_HOME" \
             --ndk-dir "$ANDROID_HOME/ndk/25.2.9519653"
 
       - name: 提取 .so
         run: |
-          mkdir -p android-so/arm64-v8a
+          mkdir -p android-so/${{ matrix.abi }}
           APK=$(find dist -name '*.apk' | head -1)
           if [ -z "$APK" ]; then echo "找不到 APK，dist 内容："; ls -laR dist | head -40; exit 1; fi
           echo "APK = $APK"
           unzip -o "$APK" 'lib/*' -d _apk
-          cp -v _apk/lib/arm64-v8a/*.so android-so/arm64-v8a/
-          ls -la android-so/arm64-v8a/ | head -20
+          cp -v _apk/lib/${{ matrix.abi }}/*.so android-so/${{ matrix.abi }}/
+          ls -la android-so/${{ matrix.abi }}/ | head -20
           printf '%s\n' \
             "Android .so 使用方式（参数模式）" \
             "=================================" \
+            "ABI: ${{ matrix.abi }}" \
             "本目录是从 python-for-android 构建产物中提取的共享库，包含：" \
             "  libpython3.*.so   CPython 运行时" \
-            "  libpybundle.so    本项目的 Python 模块（已冻结）" \
+            "  lib*.so           本项目依赖的原生库（numpy/Pillow/OpenSSL 等）" \
             "必须在同一 Python-for-Android 运行时里加载，详见" \
             "docs/二进制包.md → Android(.so)" \
             > android-so/README.txt
           # 打成 zip：Release 汇总按 *.zip 收集产物，目录形式收不进去
-          (cd android-so && zip -r ../OwnRender-android-arm64-v8a-so.zip .)
-          ls -la OwnRender-android-arm64-v8a-so.zip
+          (cd android-so && zip -r ../OwnRender-android-${{ matrix.abi }}-so.zip .)
+          ls -la OwnRender-android-${{ matrix.abi }}-so.zip
 
-      - name: 上传 .so
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: OwnRender-android-arm64-v8a-so
-          path: OwnRender-android-arm64-v8a-so.zip
+          name: OwnRender-android-${{ matrix.abi }}-so
+          path: OwnRender-android-${{ matrix.abi }}-so.zip
           retention-days: 14
 
   # ══════════════════════════════════════════════════════════════
-  # ③ 文档包（随 Release 一起发）
+  # ⑤ 文档包（随 Release 一起发）
   # ══════════════════════════════════════════════════════════════
   docs:
     name: docs-package
@@ -221,14 +347,13 @@ jobs:
           retention-days: 14
 
   # ══════════════════════════════════════════════════════════════
-  # ④ 发布：每次修改自动打包到 Release（main → nightly，tag → 版本）
+  # ⑥ 发布：每次修改自动打包到 Release（main → nightly，tag → 版本）
+  #    某个平台抖动不该卡住整条发布：有谁成功就发谁
   # ══════════════════════════════════════════════════════════════
   release:
     name: release
-    # 只依赖 docs；平台里有谁成功就发谁（某个平台抖动不该卡住整条发布，
-    # 真正的兜底是下面那步「一个平台包都没有就别发」）
-    needs: [docs, android]
-    if: always() && github.event_name != 'pull_request' && needs.docs.result == 'success'
+    needs: [docs]
+    if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -246,7 +371,7 @@ jobs:
                -exec cp -v {} out/ \;
           ls -la out/
           # 一个平台包都没有就别发空 Release（只发过 docs 不算）
-          n=$(ls out 2>/dev/null | grep -cE '^OwnRender-(linux|windows|macos|android)' || true)
+          n=$(ls out 2>/dev/null | grep -cE '^OwnRender-(linux|windows|android)' || true)
           echo "平台包数量：$n"
           if [ "$n" -eq 0 ]; then echo "SKIP_RELEASE=1" >> "$GITHUB_ENV"; fi
 
@@ -259,12 +384,12 @@ jobs:
             echo "时间：$(date -u '+%Y-%m-%d %H:%M UTC')"
             echo
             echo "## 下载"
-            echo "| 文件 | 平台 |"
+            echo "| 文件 | 平台/架构 |"
             echo "|---|---|"
             for f in out/OwnRender-*.tar.gz out/OwnRender-*.zip; do
               [ -e "$f" ] || continue
               case "$f" in *docs*) continue ;; esac
-              echo "| \`$(basename "$f")\` | $(basename "$f" | sed -E 's/OwnRender-([a-z0-9_]+-[a-z0-9_]+).*/\1/') |"
+              echo "| \`$(basename "$f")\` | $(basename "$f" | sed -E 's/^OwnRender-([^-]*-[A-Za-z0-9_]+).*/\1/') |"
             done
             echo
             echo "## 使用方式"

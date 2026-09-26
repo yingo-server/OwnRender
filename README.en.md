@@ -214,4 +214,4 @@ Asset takedown requests ([DMCA]) or commercial licensing: open an **Issue**.
 <!-- binaries-link -->
 ---
 
-📦 **Binary packages** (Windows / Linux / macOS / Android `.so`, built by CI with Nuitka) — **download & usage → [docs/en/binaries.md](docs/en/binaries.md)**
+📦 **Binary packages** (Windows / Linux / Android `.so`; x86 / x86_64 / arm64 / armv7, built by CI with Nuitka) — **download & usage → [docs/en/binaries.md](docs/en/binaries.md)**
