@@ -27,10 +27,7 @@ import json
 import re
 import time
 from typing import Optional
-
 import numpy as np
-import requests
-
 import config
 from . import utils
 
@@ -553,6 +550,7 @@ def fetch_weather(lat, lon, timeout=8) -> Optional[WeatherInfo]:
         "timezone": "auto",
     }
     try:
+        import requests          # 延迟导入：环境缺 requests 时自动降级（返回 None）
         r = requests.get(config.OPEN_METEO_URL, params=params, timeout=timeout)
         r.raise_for_status()
         data = r.json().get("current", {})
@@ -976,6 +974,7 @@ def try_ip_service(svc):
     """查询单个 IP 地理服务。返回 (lat, lon, city, region, country, name) 或 None。"""
     name, _, url, parser = svc
     try:
+        import requests          # 延迟导入：缺 requests 直接当作"服务不可用"
         r = requests.get(url, timeout=8,
                          headers={"User-Agent": f"{config.PROG}/{config.VERSION}"})
         r.raise_for_status()
