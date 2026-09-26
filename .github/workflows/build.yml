@@ -285,15 +285,33 @@ jobs:
           unzip -o "$APK" 'lib/*' -d _apk
           cp -v _apk/lib/${{ matrix.abi }}/*.so android-so/${{ matrix.abi }}/
           ls -la android-so/${{ matrix.abi }}/ | head -20
+
+          # ── 诊断：numpy / Pillow 的模块到底躺在 APK 的哪一层 ──────────
+          echo "== APK 顶层目录统计 =="
+          unzip -l "$APK" | awk 'NF>=4 {print $4}' | grep -E '/' \
+            | cut -d/ -f1 | sort | uniq -c | sort -rn | head -10
+          echo "== numpy / Pillow 相关条目数 =="
+          echo "numpy      : $(unzip -l "$APK" | grep -icE 'numpy' || true)"
+          echo "_multiarray: $(unzip -l "$APK" | grep -icE '_multiarray' || true)"
+          echo "_imaging   : $(unzip -l "$APK" | grep -icE '_imaging' || true)"
+          unzip -l "$APK" | grep -iE 'numpy|_imaging' | head -8 || true
+
+          # ── 完整运行时：把 APK 原件一起交付 ────────────────────────
+          # 光有 lib/<abi>/*.so 是不够的：numpy / Pillow 的 Python 模块在
+          # APK 的 assets/_python_bundle 里，只有带上 APK 才是可用的整套运行时。
+          cp -v "$APK" OwnRender-android-${{ matrix.abi }}.apk
+          ls -la OwnRender-android-${{ matrix.abi }}.apk
           printf '%s\n' \
-            "Android .so 使用方式（参数模式）" \
-            "=================================" \
+            "Android 交付物（参数模式）" \
+            "=========================" \
             "ABI: ${{ matrix.abi }}" \
-            "本目录是从 python-for-android 构建产物中提取的共享库，包含：" \
-            "  libpython3.*.so   CPython 运行时" \
-            "  lib*.so           本项目依赖的原生库（numpy/Pillow/OpenSSL 等）" \
-            "必须在同一 Python-for-Android 运行时里加载，详见" \
-            "docs/二进制包.md → Android(.so)" \
+            "1) OwnRender-android-${{ matrix.abi }}.apk" \
+            "   完整运行时（推荐）：CPython + numpy/Pillow/requests + 本项目代码，" \
+            "   numpy/Pillow 的 Python 模块位于其 assets/_python_bundle 内。" \
+            "2) OwnRender-android-${{ matrix.abi }}-so.zip" \
+            "   仅 native 共享库（libpython3.*.so / libmain.so / OpenSSL 等），" \
+            "   供已经自带 p4a 运行时的宿主 App 做替换。" \
+            "详见 docs/二进制包.md → Android。" \
             > android-so/README.txt
           # 打成 zip：Release 汇总按 *.zip 收集产物，目录形式收不进去
           (cd android-so && zip -r ../OwnRender-android-${{ matrix.abi }}-so.zip .)
@@ -301,8 +319,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: OwnRender-android-${{ matrix.abi }}-so
-          path: OwnRender-android-${{ matrix.abi }}-so.zip
+          name: OwnRender-android-${{ matrix.abi }}
+          path: |
+            OwnRender-android-${{ matrix.abi }}-so.zip
+            OwnRender-android-${{ matrix.abi }}.apk
           retention-days: 14
 
   # ══════════════════════════════════════════════════════════════
@@ -347,7 +367,7 @@ jobs:
       - name: 组装发布文件
         run: |
           mkdir -p out
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) \
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.apk' \) \
                -exec cp -v {} out/ \;
           ls -la out/
           # 一个平台包都没有就别发空 Release（只发过 docs 不算）
@@ -367,7 +387,7 @@ jobs:
             echo "## 下载"
             echo "| 文件 | 平台/架构 |"
             echo "|---|---|"
-            for f in out/*.tar.gz out/*.zip; do
+            for f in out/*.tar.gz out/*.zip out/*.apk; do
               [ -e "$f" ] || continue
               case "$f" in *docs*) continue ;; esac
               echo "| \`$(basename "$f")\` | $(basename "$f" | sed -E 's/^OwnRender-([A-Za-z0-9_]+-[A-Za-z0-9_]+).*/\1/') |"

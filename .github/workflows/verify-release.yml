@@ -116,40 +116,27 @@ jobs:
           python tools/verify_package.py --package-dir pkg --out-dir out/${{ matrix.key }} \
             --platform ${{ matrix.plat }} --arch ${{ matrix.arch }}
 
-      # ── Android：只能验包内容（.so 无法在宿主加载）─────────────
-      - name: 验收（Android .so 包内容）
+      # ── Android：验 native .so 包 + 完整 APK（numpy/Pillow 的模块在
+      #    APK 的 assets/_python_bundle 里，所以 APK 才是主验收对象）─────
+      - name: 验收（Android：.so 包 + APK 内容）
         if: matrix.kind == 'ziponly' && steps.dl.outputs.found == '1'
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python - <<'PY'
-          import json, os, zipfile
-          key = "${{ matrix.key }}"
-          abi = "${{ matrix.arch }}"
-          z = zipfile.ZipFile("dl/${{ matrix.asset }}")
-          names = z.namelist()
-          sos = [n for n in names if n.endswith(".so")]
-          need = {
-            "libpython3": any("libpython3" in n for n in sos),
-            "numpy": any("numpy" in n.lower() or "_multiarray" in n for n in sos),
-            "pillow": any("pillow" in n.lower() or "_imaging" in n.lower() for n in sos),
-          }
-          out = os.path.join("out", key)
-          os.makedirs(out, exist_ok=True)
-          problems = ["缺少组件：%s" % k for k, ok in need.items() if not ok]
-          problems += ["包内没有 .so"] if not sos else []
-          verdict = "PASS" if not problems else "FAIL"
-          with open(os.path.join(out, "meta.json"), "w", encoding="utf-8") as f:
-            json.dump({"platform": "android", "arch": abi, "verdict": verdict,
-                       "so_count": len(sos), "components": need,
-                       "problems": problems, "files": names[:200]}, f,
-                      ensure_ascii=False, indent=2)
-          with open(os.path.join(out, "summary.txt"), "w", encoding="utf-8") as f:
-            f.write("平台/架构：android/%s\n结论：%s\n.so 数量：%d\n" % (abi, verdict, len(sos)))
-            f.write("组件：%s\n" % need)
-            for p in problems:
-              f.write("problem: %s\n" % p)
-          print(verdict, need, len(sos))
-          PY
+          set +e
+          APK="dl/OwnRender-android-${{ matrix.arch }}.apk"
+          gh release download "$TAG" --pattern "OwnRender-android-${{ matrix.arch }}.apk" \
+            --dir dl --clobber \
+            || echo "::warning::Release($TAG) 里还没有 OwnRender-android-${{ matrix.arch }}.apk"
+          python tools/verify_package.py \
+            --out-dir "out/${{ matrix.key }}" \
+            --platform android --arch "${{ matrix.arch }}" \
+            --android-so-zip "dl/${{ matrix.asset }}" \
+            --android-apk "$APK"
+          rc=$?
+          echo "验收退出码：$rc"
+          exit $rc
 
       - uses: actions/upload-artifact@v4
         if: always()

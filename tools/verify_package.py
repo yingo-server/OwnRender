@@ -101,15 +101,162 @@ def bad(res):
     return None
 
 
+def _scan_archive(kind, blob, want, depth=0, found=None):
+    """在归档（zip/tar/gzip）里递归找 wаnt 关键字，返回 {(关键字, 位置): 命中数}"""
+    import io
+    import tarfile
+    import zipfile
+    if found is None:
+        found = {}
+    if depth > 2:
+        return found
+    if blob[:2] == b"\x1f\x8b":
+        import gzip
+        try:
+            blob = gzip.decompress(blob)
+        except Exception:
+            return found
+    for kind2, opener in (("zip", zipfile.ZipFile), ("tar", tarfile.open)):
+        try:
+            if kind2 == "zip":
+                z = opener(io.BytesIO(blob))
+                names = z.namelist()
+            else:
+                z = opener(fileobj=io.BytesIO(blob))
+                names = z.getnames()
+        except Exception:
+            continue
+        for n in names:
+            low = n.lower()
+            for w in want:
+                if w in low:
+                    found[(w, "%s:%s" % (kind, n))] = 1
+        return found
+    return found
+
+
+def _verify_android(a):
+    """Android 交付物验收：native .so 包 + 完整 APK（numpy/Pillow 在哪一层）。"""
+    import gzip
+    import io
+    import zipfile
+
+    out_dir = os.path.abspath(a.out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    problems = []
+    notes = []
+    native = {}
+    bundle = {}
+    apk = {}
+    want = ("numpy", "_multiarray", "_imaging")
+
+    # ① native .so 包
+    if a.android_so_zip and os.path.exists(a.android_so_zip):
+        z = zipfile.ZipFile(a.android_so_zip)
+        names = z.namelist()
+        sos = [n for n in names if n.endswith(".so")]
+        native = {
+            "libpython3": any("libpython3" in n for n in sos),
+            "libmain": any("libmain" in n for n in sos),
+            "libpybundle": any("libpybundle" in n for n in sos),
+        }
+        for k, ok in native.items():
+            if not ok:
+                problems.append("so.zip 缺少 %s" % k)
+        if not sos:
+            problems.append("so.zip 里没有 .so")
+        bl = [n for n in sos if "libpybundle" in n]
+        if bl:
+            try:
+                raw = gzip.decompress(z.read(bl[0]))
+                try:
+                    iz = zipfile.ZipFile(io.BytesIO(raw))
+                    inn = iz.namelist()
+                    bundle = {
+                        "entries": len(inn),
+                        "numpy": sum(1 for n in inn if "numpy" in n.lower()),
+                        "_imaging": sum(1 for n in inn if "_imaging" in n.lower()),
+                        "inner_so": sum(1 for n in inn if n.endswith(".so")),
+                    }
+                except Exception as e:
+                    bundle = {"error": "内层不是 zip：%s" % e}
+            except Exception as e:
+                bundle = {"error": "gzip 解压失败：%s" % e}
+        notes.append("so.zip 内 _python_bundle：%s" % bundle)
+    else:
+        problems.append("没有可检查的 .so 包：%s" % a.android_so_zip)
+
+    # ② 完整 APK：numpy/Pillow 的模块可能在普通条目、也可能嵌在内部归档里
+    if a.android_apk and os.path.exists(a.android_apk):
+        az = zipfile.ZipFile(a.android_apk)
+        an = az.namelist()
+        apk = {
+            "entries": len(an),
+            "lib_so": sum(1 for n in an if n.startswith("lib/") and n.endswith(".so")),
+            "assets": sum(1 for n in an if n.startswith("assets/")),
+            "plain_hits": {w: sum(1 for n in an if w in n.lower()) for w in want},
+        }
+        # 内嵌归档（assets/*.tar|.zip|.tgz、lib/*/libpybundle.so …）里再找一层
+        nested = {}
+        cands = [n for n in an
+                 if n.endswith(".so") and "pybundle" in n
+                 or (n.startswith("assets/") and n.endswith((".tar", ".zip", ".tgz", ".gz")))]
+        for n in cands[:12]:
+            try:
+                got = _scan_archive(n, az.read(n), want)
+                for (w, where), c in got.items():
+                    nested["%s@%s" % (w, where)] = c
+            except Exception as e:
+                notes.append("扫描 %s 失败：%s" % (n, e))
+        apk["nested_hits"] = nested
+        hit_numpy = apk["plain_hits"]["numpy"] or apk["plain_hits"]["_multiarray"] \
+            or any(k.startswith(("numpy", "_multiarray")) for k in nested)
+        hit_pil = apk["plain_hits"]["_imaging"] or any(k.startswith("_imaging") for k in nested)
+        if not hit_numpy:
+            problems.append("APK 里找不到 numpy 模块（普通条目与内嵌归档都查过了）")
+        if not hit_pil:
+            problems.append("APK 里找不到 Pillow 的 _imaging")
+    else:
+        problems.append("没有提供 APK 一起验收（--android-apk）")
+
+    verdict = "PASS" if not problems else "FAIL"
+    with open(os.path.join(out_dir, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump({"platform": "android", "arch": a.arch, "verdict": verdict,
+                   "native": native, "bundle": bundle, "apk": apk,
+                   "problems": problems, "notes": notes}, f,
+                  ensure_ascii=False, indent=2)
+    with open(os.path.join(out_dir, "summary.txt"), "w", encoding="utf-8") as f:
+        f.write("平台/架构：android/%s\n结论：%s\n" % (a.arch, verdict))
+        f.write("native .so：%s\n" % native)
+        f.write("_python_bundle：%s\n" % bundle)
+        f.write("APK：%s\n" % json.dumps(apk, ensure_ascii=False))
+        for p in problems:
+            f.write("problem: %s\n" % p)
+    print("结论：%s" % verdict)
+    for p in problems:
+        print("  !! %s" % p)
+    print("APK 普通条目的 numpy/PIL 命中：%s" % (apk.get("plain_hits")))
+    print("APK 内嵌归档命中：%s" % (apk.get("nested_hits")))
+    return 0 if verdict == "PASS" else 1
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--package-dir", required=True)
+    ap.add_argument("--package-dir", required=False)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--platform", default=platform.system().lower())
     ap.add_argument("--arch", default=platform.machine())
     ap.add_argument("--ascii-env", action="store_true",
                     help="额外在 LC_ALL=C / PYTHONUTF8=0 下跑一遍列表命令")
+    ap.add_argument("--android-so-zip", help="Android：native .so 包（zip）")
+    ap.add_argument("--android-apk", help="Android：完整 APK（推荐验收对象）")
     a = ap.parse_args()
+
+    if a.android_so_zip or a.android_apk:
+        return _verify_android(a)
+
+    if not a.package_dir:
+        ap.error("非 Android 模式必须给 --package-dir")
 
     out_dir = os.path.abspath(a.out_dir)
     os.makedirs(out_dir, exist_ok=True)
