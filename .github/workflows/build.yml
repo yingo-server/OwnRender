@@ -156,11 +156,14 @@ jobs:
         env:
           ANDROIDNDKVER: 25.2.9519653
         run: |
+          # 版本号从 config.py 取，避免和引擎版本漂移
+          APPVER=$(python -c 'import re;print(re.search(r"VERSION\s*=\s*\"([^\"]+)\"",open("config.py",encoding="utf-8").read()).group(1))')
+          echo "APPVER=$APPVER"
           p4a apk \
             --private "$GITHUB_WORKSPACE" \
             --package org.ownrender.engine \
             --name OwnRender \
-            --version 10.0.0 \
+            --version "$APPVER" \
             --bootstrap service_only \
             --requirements python3,numpy,pillow,requests \
             --arch arm64-v8a \
@@ -172,7 +175,8 @@ jobs:
       - name: 提取 .so
         run: |
           mkdir -p android-so/arm64-v8a
-          APK=$(ls dist/ownrender/*.apk | head -1)
+          APK=$(find dist -name '*.apk' | head -1)
+          if [ -z "$APK" ]; then echo "找不到 APK，dist 内容："; ls -laR dist | head -40; exit 1; fi
           echo "APK = $APK"
           unzip -o "$APK" 'lib/*' -d _apk
           cp -v _apk/lib/arm64-v8a/*.so android-so/arm64-v8a/
@@ -221,9 +225,10 @@ jobs:
   # ══════════════════════════════════════════════════════════════
   release:
     name: release
-    # android 放进 needs 只为「等它一起发」；它的结果不参与判定（失败也照发）
-    needs: [desktop, docs, android]
-    if: always() && github.event_name != 'pull_request' && needs.desktop.result == 'success'
+    # 只依赖 docs；平台里有谁成功就发谁（某个平台抖动不该卡住整条发布，
+    # 真正的兜底是下面那步「一个平台包都没有就别发」）
+    needs: [docs, android]
+    if: always() && github.event_name != 'pull_request' && needs.docs.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write

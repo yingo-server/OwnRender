@@ -92,7 +92,10 @@ def build(out: Path, onefile: bool):
            "--include-package-data=certifi",
            # 注意：素材不塞进二进制。onefile 不压缩、standalone 又必须整套目录一起拷，
            # 把 background/fonts 再放一份进包里纯属浪费 40MB+，它们本来就与可执行文件同级。
-           "--nofollow-import-to=pytest,setuptools,pip,unittest",
+           "--nofollow-import-to=pytest,setuptools,pip,unittest,"
+           "tkinter,_tkinter,scipy,matplotlib,IPython,pydoc,doctest,"
+           "test,lib2to3,distutils,numpy.f2py",
+           # 注：刻意不排除 email/http/urllib —— requests 链路要它们，排了会让 AI 模式在真机上炸
            f"--output-dir={out}",
            f"--output-filename={EXE}",
            "--company-name=OwnRender",
@@ -112,11 +115,80 @@ def build(out: Path, onefile: bool):
         sys.exit(f"Nuitka 构建失败，返回码 {r.returncode}")
 
 
+def _elf_load_ok(path: Path) -> bool:
+    """校验每个 PT_LOAD 的 offset 与 vaddr 是否同余于 align。
+
+    某些链接器产出的 .so 在 strip 后会破坏页对齐，加载时直接报
+    「ELF load command address/offset not page-aligned」，因此剥完必须验一遍。
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64)
+        if head[:4] != b"\x7fELF":
+            return True
+        is64 = head[4] == 2
+        if is64:
+            phoff = int.from_bytes(head[0x20:0x28], "little")
+            entsz = int.from_bytes(head[0x36:0x38], "little")
+            num = int.from_bytes(head[0x38:0x3A], "little")
+        else:
+            phoff = int.from_bytes(head[0x1C:0x20], "little")
+            entsz = int.from_bytes(head[0x2A:0x2C], "little")
+            num = int.from_bytes(head[0x2C:0x2E], "little")
+        with open(path, "rb") as f:
+            f.seek(phoff)
+            buf = f.read(entsz * num)
+    except (OSError, ValueError):
+        return True
+    for i in range(num):
+        ph = buf[i * entsz:(i + 1) * entsz]
+        if len(ph) < entsz or int.from_bytes(ph[0:4], "little") != 1:
+            continue                                    # 只看 PT_LOAD
+        if is64:
+            off = int.from_bytes(ph[8:16], "little")
+            vaddr = int.from_bytes(ph[16:24], "little")
+            align = int.from_bytes(ph[48:56], "little")
+        else:
+            off = int.from_bytes(ph[4:8], "little")
+            vaddr = int.from_bytes(ph[8:12], "little")
+            align = int.from_bytes(ph[28:32], "little")
+        if align > 1 and off % align != vaddr % align:
+            return False
+    return True
+
+
+def _dlopen_ok(path: Path) -> bool:
+    """真让动态加载器加载一次，确认 strip 没把库弄坏。
+
+    _elf_load_ok 只查静态表；这里在子进程里 dlopen，能复现
+    「ELF load command address/offset not page-aligned」这类**运行时**错误。
+    只把「文件被弄坏」类错误算失败；undefined symbol 之类是该库自身的加载前提，
+    不算 strip 的锅（否则会误还原一堆本来就好好的库）。
+    """
+    n = path.name
+    if not (n.endswith((".so", ".dylib")) or ".so." in n):
+        return True
+    code = "import ctypes,sys;ctypes.CDLL(sys.argv[1],mode=ctypes.RTLD_LOCAL)"
+    try:
+        r = subprocess.run([sys.executable, "-c", code, str(path)],
+                           capture_output=True, text=True, timeout=120)
+    except Exception:                                    # noqa: BLE001
+        return True
+    if r.returncode == 0:
+        return True
+    err = (r.stderr or "").lower()
+    fatal = ("page-aligned", "invalid elf", "failed to map segment",
+             "wrong elf class", "truncated", "too short",
+             "cannot read file data", "cannot open shared object")
+    return not any(k in err for k in fatal)
+
+
 def _strip_tree(dest: Path):
     """剥掉符号表。
 
     Python 运行时与 numpy(OpenBLAS) 的 .so 默认带完整符号：
     libpython 28MB → 6MB、openblas 26MB → 8MB 这种量级，是体积最大的一块肥肉。
+    剥完必须校验（见 _elf_load_ok），坏了就还原 —— 宁可少省几 MB 也不能让包跑不起来。
     """
     args = ["--strip-unneeded"] if not (IS_WIN or IS_MAC) else ["-x"]
     exe = shutil.which("strip") or (shutil.which("strip.exe")
@@ -126,7 +198,7 @@ def _strip_tree(dest: Path):
         return
     magics = (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe",
               b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce")
-    n = saved = 0
+    n = saved = bad = 0
     for p in sorted(dest.rglob("*")):
         if not p.is_file() or p.is_symlink():
             continue
@@ -134,18 +206,27 @@ def _strip_tree(dest: Path):
             with open(p, "rb") as f:
                 if f.read(4) not in magics:
                     continue
+            before_bytes = p.read_bytes()
         except OSError:
             continue
-        before = p.stat().st_size
+        before = len(before_bytes)
         try:
             r = subprocess.run([exe] + args + [str(p)],
                                capture_output=True, timeout=300)
         except Exception:                                    # noqa: BLE001
             continue
-        if r.returncode == 0:
-            n += 1
-            saved += max(0, before - p.stat().st_size)
-    print(f"== 剥符号 {n} 个文件，省下 {saved / 1048576:.1f} MB")
+        if r.returncode != 0:
+            continue
+        if not _elf_load_ok(p) or not _dlopen_ok(p):
+            p.write_bytes(before_bytes)                      # 还原
+            bad += 1
+            why = "段对齐" if not _elf_load_ok(p) else "实际加载"
+            print(f"   ! 还原（strip 破坏{why}）: {p.name}")
+            continue
+        n += 1
+        saved += max(0, before - p.stat().st_size)
+    print(f"== 剥符号 {n} 个文件，省下 {saved / 1048576:.1f} MB"
+          f"（还原 {bad} 个）")
 
 
 def assemble(out: Path, name: str, onefile: bool) -> Path:
@@ -214,12 +295,13 @@ def assemble(out: Path, name: str, onefile: bool) -> Path:
 def archive(dest: Path) -> Path:
     if IS_WIN:
         zpath = dest.with_suffix(".zip")
-        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED,
+                             compresslevel=9) as z:
             for p in dest.rglob("*"):
                 z.write(p, p.relative_to(dest.parent))
         return zpath
     tpath = Path(str(dest) + ".tar.gz")
-    with tarfile.open(tpath, "w:gz") as t:
+    with tarfile.open(tpath, "w:gz", compresslevel=9) as t:
         t.add(dest, arcname=dest.name)
     return tpath
 
