@@ -390,6 +390,16 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      # ★ 依赖必须装全：gen_cli_doc → import config（要 numpy）
+      #   → from frame_interact import cli → frame_interact/__init__ → runner
+      #   → frame_light.light → from PIL import Image（要 pillow）
+      #   少任何一个，这一步都会崩（stderr），表现为"文档不一致"。
+      - name: 装文档生成依赖（numpy + pillow）
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet numpy pillow
+          python -c "import numpy, PIL; print('numpy', numpy.__version__, '| pillow', PIL.__version__)"
+
       - name: 生成 AI 参数文档（从 cli.py / config.py 内省，保证与代码一致）
         run: |
           python tools/gen_cli_doc.py

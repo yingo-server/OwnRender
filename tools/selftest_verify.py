@@ -214,8 +214,10 @@ def main():
         # ── F. 文档与代码一致 ────────────────────────────────────────
         r = subprocess.run([PY, str(ROOT / "tools" / "gen_cli_doc.py"), "--check"],
                            capture_output=True, text=True)
+        # 把 stderr 也带上：缺依赖时是崩溃（stderr），只看 stdout 会"详情为空"
+        detail = (r.stdout.strip() + " " + r.stderr.strip()).strip()[-300:]
         check("F1 docs/cli-args.json 与 CLI-参数.ai.md 与代码一致",
-              r.returncode == 0, r.stdout.strip()[-200:])
+              r.returncode == 0, detail)
 
         # ── G. 大气/天气物理（frame_light/atmosphere.py）─────────────
         # 这些是"参数必须真实"的守门测试：物理量必须单调/守恒/有界。

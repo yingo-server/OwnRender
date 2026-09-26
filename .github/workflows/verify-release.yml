@@ -212,11 +212,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 装最小依赖（config 需要 numpy）
+      - name: 装最小依赖（config 需要 numpy；frame_interact 链路需要 pillow）
         run: |
           pip install --quiet --upgrade pip
-          pip install --quiet numpy
-          python -c "import numpy; print('numpy', numpy.__version__)"
+          pip install --quiet numpy pillow
+          python -c "import numpy, PIL; print('numpy', numpy.__version__, '| pillow', PIL.__version__)"
 
       - name: 跑工具链自测
         run: python tools/selftest_verify.py
