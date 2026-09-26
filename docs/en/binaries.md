@@ -12,8 +12,7 @@
 | Windows x64 | `OwnRender-windows-x86_64.zip` |
 | Linux x86_64 | `OwnRender-linux-x86_64.tar.gz` (glibc 2.35+) |
 | Linux aarch64 | `OwnRender-linux-aarch64.tar.gz` |
-| macOS Intel | `OwnRender-macos-x86_64.tar.gz` |
-| macOS Apple Silicon | `OwnRender-macos-aarch64.tar.gz` |
+| macOS Apple Silicon | `OwnRender-macos-aarch64.tar.gz` (Intel Macs: use the source version) |
 | Android | `OwnRender-android-arm64-v8a-so-*.zip` — **`.so` libraries**, CLI/argument mode only (§5) |
 | Docs | `OwnRender-docs.zip` |
 
@@ -167,7 +166,7 @@ still released.
 
 | Job | Contents |
 |---|---|
-| `desktop` | matrix: `ubuntu-22.04` (x86_64), `ubuntu-24.04-arm` (aarch64), `windows-latest`, `macos-13` (Intel), `macos-14` (Apple Silicon) → build → **binary smoke test incl. a real render** → upload |
+| `desktop` | matrix: `ubuntu-22.04` (x86_64), `ubuntu-24.04-arm` (aarch64), `windows-latest`, `macos-14` (Apple Silicon) → build → **binary smoke test incl. a real render** → upload |
 | `android` | python-for-android build → extract `.so` from the APK (`continue-on-error`) |
 | `docs` | packs `README + docs/ + tools/` into `OwnRender-docs.zip` |
 | `release` | aggregates artifacts → publishes to Releases (push to `main` updates the rolling **nightly** prerelease; `v*` tags publish a versioned release) |
@@ -193,13 +192,12 @@ them. A bundled fallback copy exists inside the binary.
 
 **Can the Android `.so` be used in Termux?** No — use the source version there.
 
-**Why is the macOS (Intel) package missing from a Release?** GitHub's `macos-13`
-(Intel) runners are scarce and queue for a long time; that leg is marked
-"allowed to fail" so a missing Intel build never blocks a release. Try the next
-automatic build, or use the source version / the Apple Silicon package.
+**Is there a macOS (Intel) build?** No. Intel runners (`macos-13`) are retired
+and queue indefinitely, so only Apple Silicon is published
+(`OwnRender-macos-aarch64.tar.gz`). On an Intel Mac use the source version.
 
 **Are the artifacts updated automatically?** Yes. Every push to `main` rebuilds
-and refreshes the three desktop packages, the Android `.so` and the docs bundle
+and refreshes the 4 desktop packages, the Android `.so` and the docs bundle
 in the `nightly` prerelease; pushing a `v*` tag publishes a stable release. This
 document is embedded in the release body.
 
