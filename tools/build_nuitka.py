@@ -90,9 +90,8 @@ def build(out: Path, onefile: bool):
            # 网络与证书
            "--include-package=certifi",
            "--include-package-data=certifi",
-           # 兜底素材（可执行文件旁边没有时用它们）
-           "--include-data-dir=background=background",
-           "--include-data-dir=fonts=fonts",
+           # 注意：素材不塞进二进制。onefile 不压缩、standalone 又必须整套目录一起拷，
+           # 把 background/fonts 再放一份进包里纯属浪费 40MB+，它们本来就与可执行文件同级。
            "--nofollow-import-to=pytest,setuptools,pip,unittest",
            f"--output-dir={out}",
            f"--output-filename={EXE}",
@@ -111,6 +110,42 @@ def build(out: Path, onefile: bool):
     r = subprocess.run(cmd, cwd=str(ROOT))
     if r.returncode != 0:
         sys.exit(f"Nuitka 构建失败，返回码 {r.returncode}")
+
+
+def _strip_tree(dest: Path):
+    """剥掉符号表。
+
+    Python 运行时与 numpy(OpenBLAS) 的 .so 默认带完整符号：
+    libpython 28MB → 6MB、openblas 26MB → 8MB 这种量级，是体积最大的一块肥肉。
+    """
+    args = ["--strip-unneeded"] if not (IS_WIN or IS_MAC) else ["-x"]
+    exe = shutil.which("strip") or (shutil.which("strip.exe")
+                                    if IS_WIN else None)
+    if not exe:
+        print("== 未找到 strip，跳过剥符号")
+        return
+    magics = (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe",
+              b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce")
+    n = saved = 0
+    for p in sorted(dest.rglob("*")):
+        if not p.is_file() or p.is_symlink():
+            continue
+        try:
+            with open(p, "rb") as f:
+                if f.read(4) not in magics:
+                    continue
+        except OSError:
+            continue
+        before = p.stat().st_size
+        try:
+            r = subprocess.run([exe] + args + [str(p)],
+                               capture_output=True, timeout=300)
+        except Exception:                                    # noqa: BLE001
+            continue
+        if r.returncode == 0:
+            n += 1
+            saved += max(0, before - p.stat().st_size)
+    print(f"== 剥符号 {n} 个文件，省下 {saved / 1048576:.1f} MB")
 
 
 def assemble(out: Path, name: str, onefile: bool) -> Path:
@@ -143,6 +178,9 @@ def assemble(out: Path, name: str, onefile: bool) -> Path:
     for f in ("README.md", "README.en.md", "LICENSE", "CREDITS.md"):
         if (ROOT / f).exists():
             shutil.copy2(ROOT / f, dest / f)
+
+    # 3) 剥符号（只对刚组装好的副本动手，不影响 dist 里的原产物）
+    _strip_tree(dest)
 
     # 3) 快速上手
     (dest / "RUN.txt").write_text(

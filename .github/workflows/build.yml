@@ -60,7 +60,7 @@ jobs:
 
       - name: Nuitka 打包
         shell: bash
-        run: python tools/build_nuitka.py --onefile --out dist --archive
+        run: python tools/build_nuitka.py --no-onefile --out dist --archive
 
       - name: 冒烟测试（二进制必须能独立跑）
         shell: bash
@@ -122,7 +122,37 @@ jobs:
           # 2023.9.16 = Python 3.10.10 + numpy 1.22.3，recipe 组合自洽
           pip install "cython<3.0" "python-for-android==2023.9.16"
 
-      - name: 构建（service_only bootstrap → 参数模式）
+      - name: 构建 dist（p4a create，编 Python/numpy 等 recipe）
+        env:
+          ANDROIDNDKVER: 25.2.9519653
+        run: |
+          p4a create \
+            --dist-name ownrender \
+            --bootstrap service_only \
+            --requirements python3,numpy,pillow,requests \
+            --arch arm64-v8a \
+            --sdk-dir "$ANDROID_HOME" \
+            --ndk-dir "$ANDROID_HOME/ndk/25.2.9519653"
+
+      - name: 修 p4a 2023.9.16 的 dist 模板 bug
+        run: |
+          # 该版本生成的 dists/*/build.py 引用了 apk 阶段并未定义的 --orientation，
+          # 打包时会 AttributeError: 'Namespace' object has no attribute 'orientation'
+          F="$HOME/.local/share/python-for-android/dists/ownrender/build.py"
+          ls -la "$F"
+          python - "$F" <<'PY'
+          import io, sys
+          p = sys.argv[1]
+          s = io.open(p, encoding="utf-8").read()
+          new = s.replace("args.orientation",
+                          "getattr(args, 'orientation', 'portrait')")
+          new = new.replace("args.manifest_orientation",
+                            "getattr(args, 'manifest_orientation', None)")
+          io.open(p, "w", encoding="utf-8").write(new)
+          print("orientation 补丁:", new != s)
+          PY
+
+      - name: 打包 APK（复用已有 dist，只为提取 .so）
         env:
           ANDROIDNDKVER: 25.2.9519653
         run: |
