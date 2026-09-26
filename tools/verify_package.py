@@ -36,23 +36,35 @@ def log(msg, fh=None):
 
 
 def find_exe(pkg_dir):
-    """在包目录里找主可执行文件。"""
-    names = ("OwnRender.exe", "OwnRender", "ownrender.exe", "ownrender")
-    roots = [pkg_dir]
-    for sub in ("OwnRender.dist", "OwnRender", "."):
-        roots.append(os.path.join(pkg_dir, sub))
-    for r in roots:
-        for n in names:
-            p = os.path.join(r, n)
-            if os.path.isfile(p):
-                return p
-    # 兜底：顶层任意可执行文件
+    """在包目录里找主可执行文件。
+
+    打包脚本产出的结构是 <包名>/ownrender(.exe)（Windows 为 ownrender.exe），
+    所以按"名字优先 + 层数最浅"扫描，绝不把 LICENSE/README 之类当可执行文件
+    （Windows 上 os.access(X_OK) 对任何文件都为真，必须靠名字识别）。
+    """
+    pkg_dir = os.path.abspath(pkg_dir)
+    want = ("ownrender.exe", "ownrender")           # 打包脚本真实产出的名字
+    hits = []
     for dp, dns, fns in os.walk(pkg_dir):
+        dns[:] = [d for d in dns if d not in {"__pycache__", ".git"}]
+        depth = dp[len(pkg_dir):].count(os.sep)
+        if depth > 3:
+            dns[:] = []
+            continue
         for f in fns:
-            if f.endswith(".exe") or (os.access(os.path.join(dp, f), os.X_OK)
-                                      and not f.endswith((".so", ".dll", ".dylib",
-                                                          ".py", ".md"))):
-                return os.path.join(dp, f)
+            if f.lower() in want:
+                hits.append((depth, os.path.join(dp, f)))
+    if hits:
+        hits.sort(key=lambda t: (t[0], len(t[1])))
+        return hits[0][1]
+    # 兜底：.exe 或（POSIX 下）可执行、且名字里带 ownrender 的文件
+    for dp, dns, fns in os.walk(pkg_dir):
+        for f in sorted(fns):
+            p = os.path.join(dp, f)
+            if f.lower().endswith(".exe") or (
+                    "ownrender" in f.lower() and os.access(p, os.X_OK)
+                    and not f.lower().endswith((".md", ".txt", ".pem", ".json"))):
+                return p
     return None
 
 

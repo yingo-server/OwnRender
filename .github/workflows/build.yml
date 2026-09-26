@@ -89,8 +89,10 @@ jobs:
           retention-days: 14
 
   # ══════════════════════════════════════════════════════════════
-  # ② Linux 32 位：x86(i386) / armv7(armhf)
-  #    x86 走原生 386 容器；armv7 走 qemu 模拟（慢，失败不阻塞发布）
+  # ② Linux 32 位：x86(i386)
+  #    armv7(armhf) 走 qemu 模拟，单个 job 要 40 分钟以上，
+  #    会拖住整条流水线，已拆到独立 workflow：build-armv7.yml
+  #    （它可以随时构建，并把包"追加"进同一个 Release）
   # ══════════════════════════════════════════════════════════════
   linux-32bit:
     name: ${{ matrix.name }}
@@ -102,7 +104,6 @@ jobs:
       matrix:
         include:
           - { name: linux-x86,   image: debian:bookworm,         platform: 'linux/386',    timeout: 150, soft: false }
-          - { name: linux-armv7, image: arm32v7/debian:bookworm, platform: 'linux/arm/v7', timeout: 330, soft: true }
     steps:
       - uses: actions/checkout@v4
 

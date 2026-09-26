@@ -50,16 +50,27 @@ jobs:
           platforms: arm
 
       - name: 拉取 Release 资产
+        id: dl
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          mkdir -p dl out
-          gh release download "$TAG" --pattern '${{ matrix.asset }}' --dir dl --clobber \
-            || { echo "::warning::精确资产名未匹配，下面列出 Release 全部资产名：";
-                 gh release view "$TAG" --json assets -q '.assets[].name'; exit 1; }
-          ls -la dl
+          mkdir -p dl "out/${{ matrix.key }}"
+          if gh release download "$TAG" --pattern '${{ matrix.asset }}' --dir dl --clobber; then
+            echo "found=1" >> "$GITHUB_OUTPUT"
+            ls -la dl
+          else
+            echo "found=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::Release($TAG) 里还没有 ${{ matrix.asset }}（该平台可能尚未构建成功）"
+            {
+              echo "平台/架构：${{ matrix.plat }}/${{ matrix.arch }}"
+              echo "结论：MISSING"
+              echo "说明：Release($TAG) 里没有资产 ${{ matrix.asset }}，该平台尚未产出可发布的包。"
+              echo "Release 现有资产："
+              gh release view "$TAG" --json assets -q '.assets[].name' | sed 's/^/  - /'
+            } > "out/${{ matrix.key }}/summary.txt"
+            cat "out/${{ matrix.key }}/summary.txt"
+          fi
 
       - name: 安装验收脚本用到的 Python（宿主）
         if: matrix.kind == 'native' || matrix.kind == 'win'
@@ -69,7 +80,7 @@ jobs:
 
       # ── 原生 Linux ────────────────────────────────────────────
       - name: 解压 + 验收（原生 Linux）
-        if: matrix.kind == 'native'
+        if: matrix.kind == 'native' && steps.dl.outputs.found == '1'
         shell: bash
         run: |
           set -e
@@ -79,7 +90,7 @@ jobs:
 
       # ── 容器内验收（32 位 x86 / armv7）────────────────────────
       - name: 解压 + 容器内验收
-        if: matrix.kind == 'docker'
+        if: matrix.kind == 'docker' && steps.dl.outputs.found == '1'
         shell: bash
         run: |
           set -e
@@ -97,7 +108,7 @@ jobs:
 
       # ── Windows ──────────────────────────────────────────────
       - name: 解压 + 验收（Windows）
-        if: matrix.kind == 'win'
+        if: matrix.kind == 'win' && steps.dl.outputs.found == '1'
         shell: bash
         run: |
           set -e
@@ -107,7 +118,7 @@ jobs:
 
       # ── Android：只能验包内容（.so 无法在宿主加载）─────────────
       - name: 验收（Android .so 包内容）
-        if: matrix.kind == 'ziponly'
+        if: matrix.kind == 'ziponly' && steps.dl.outputs.found == '1'
         shell: bash
         run: |
           python - <<'PY'
@@ -162,8 +173,8 @@ jobs:
       - name: 汇总
         run: |
           python - <<'PY'
-          import json, os, glob
-          rows, fails = [], []
+          import json, os, glob, re
+          rows, fails, missing = [], [], []
           for p in sorted(glob.glob("all/*/meta.json")):
               d = json.load(open(p, encoding="utf-8"))
               key = os.path.basename(os.path.dirname(p))
@@ -173,6 +184,20 @@ jobs:
                   "✅" if ok else "❌ " + "; ".join(d.get("problems") or [])))
               if not ok:
                   fails.append(key)
+          # 只有 summary.txt（Release 里还没有这个包）→ MISSING 行
+          for p in sorted(glob.glob("all/*/summary.txt")):
+              key = os.path.basename(os.path.dirname(p))
+              if os.path.exists(os.path.join(os.path.dirname(p), "meta.json")):
+                  continue
+              txt = open(p, encoding="utf-8", errors="replace").read()
+              m = re.search(r"平台/架构：(\S+)", txt)
+              v = re.search(r"结论：(\S+)", txt)
+              rows.append("| %s | %s | %s | %s |" % (
+                  (m.group(1).split("/")[0] if m else "?"),
+                  (m.group(1).split("/")[1] if m else "?"),
+                  key.replace("test_", ""),
+                  "⚠️ " + (v.group(1) if v else "MISSING") + "（Release 里暂无此包）"))
+              missing.append(key)
           body = ["# Release 验收结果", "",
                   "| 平台 | 架构 | artifact | 结论 |", "|---|---|---|---|"] + rows
           txt = "\n".join(body) + "\n"
@@ -180,7 +205,7 @@ jobs:
           print(txt)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write(txt)
-          print("FAIL 数：%d" % len(fails))
+          print("FAIL 数：%d  MISSING 数：%d" % (len(fails), len(missing)))
           PY
 
       - uses: actions/upload-artifact@v4

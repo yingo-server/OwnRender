@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
 EXE = "ownrender.exe" if IS_WIN else "ownrender"
+SKIP_BUNDLE = False          # --no-bundle-libs 时跳过"补系统库"
 
 
 def _fix_encoding():
@@ -229,6 +230,108 @@ def _strip_tree(dest: Path):
           f"（还原 {bad} 个）")
 
 
+def _find_system_lib(soname: str):
+    """在系统里找一个 soname 对应的真实文件（优先 ldconfig 缓存）。"""
+    try:
+        r = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=60)
+        for line in r.stdout.splitlines():
+            if soname in line and "=>" in line:
+                p = line.split("=>", 1)[1].strip()
+                if os.path.isfile(p):
+                    return p
+    except Exception:
+        pass
+    for d in ("/lib", "/usr/lib", "/lib64", "/usr/lib64", "/lib32", "/usr/lib32",
+              "/usr/local/lib", "/opt/lib"):
+        if not os.path.isdir(d):
+            continue
+        for root, _dirs, files in os.walk(d):
+            if soname in files:
+                return os.path.join(root, soname)
+    return None
+
+
+def _bundle_system_libs(dest: Path) -> None:
+    """把包内 ELF 依赖的、系统里才有的共享库补进便携目录。
+
+    为什么需要：某些发行版的 python3-numpy 链接系统 BLAS（libblas.so.3），
+    这是"系统库"而非 Python 扩展，Nuitka standalone 不会带；
+    构建容器恰好装了它 → 冒烟测试通过，用户机器上却 ImportError。
+    做法：反复 ldd 找出 "not found"，把库复制到包根（Nuitka 的 RPATH
+    是 $ORIGIN 系，包根即可命中），最多 4 轮，最后再验证一次。
+    """
+    if IS_WIN:
+        return
+    if not shutil.which("ldd"):
+        print("== 跳过系统库补全：本机没有 ldd")
+        return
+
+    def elf_files():
+        for p in dest.rglob("*"):
+            if p.is_file() and (p.name == EXE or ".so" in p.name):
+                yield p
+
+    # 包内已有的文件名集合。Nuitka 把 RPATH/RUNPATH 设在主程序上，
+    # 单独 ldd 某个 .so 时，"包内其实已有"的库也会被报成 not found；
+    # 用它过滤掉这种假阳性（真缺的库不会出现在包内）。
+    present = {p.name for p in dest.rglob("*") if p.is_file()}
+
+    added = {}
+    for rnd in range(4):
+        missing = {}
+        for p in elf_files():
+            try:
+                r = subprocess.run(["ldd", str(p)], capture_output=True, text=True,
+                                   timeout=120)
+            except Exception:
+                continue
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if "=> not found" not in line:
+                    continue
+                soname = line.split("=>", 1)[0].strip()
+                if soname:
+                    missing.setdefault(soname, p)
+        missing = {k: v for k, v in missing.items() if k not in present}
+        if not missing:
+            break
+        print(f"== 系统库补全 第{rnd + 1}轮：缺 {len(missing)} 个 {sorted(missing)[:8]}")
+        gone = True
+        for soname, holder in missing.items():
+            src = _find_system_lib(soname)
+            if not src:
+                print(f"   ! 系统里也找不到 {soname}（{holder.name} 需要）")
+                gone = False
+                continue
+            dst = dest / soname
+            if not dst.exists():
+                shutil.copy2(src, dst)
+                os.chmod(dst, 0o755)
+                added[soname] = src
+                present.add(soname)
+        if gone:
+            break
+
+    # 验证
+    left = {}
+    for p in elf_files():
+        try:
+            r = subprocess.run(["ldd", str(p)], capture_output=True, text=True, timeout=120)
+        except Exception:
+            continue
+        for line in r.stdout.splitlines():
+            if "=> not found" in line:
+                so = line.split("=>", 1)[0].strip()
+                if so and so not in present:
+                    left.setdefault(so, p.name)
+    if added:
+        print(f"== 已补入 {len(added)} 个系统库：{sorted(added)}")
+    if left:
+        print(f"   ! 仍有未解析依赖：{sorted(left)} —— 该包在干净系统上可能跑不起来")
+    else:
+        print("== 自包含检查通过：包内 ELF 无未解析依赖")
+
+
 def assemble(out: Path, name: str, onefile: bool) -> Path:
     """把可执行文件与素材/文档组装成便携目录。"""
     dest = out / name
@@ -262,6 +365,10 @@ def assemble(out: Path, name: str, onefile: bool) -> Path:
 
     # 3) 剥符号（只对刚组装好的副本动手，不影响 dist 里的原产物）
     _strip_tree(dest)
+
+    # 3.5) 补全"系统库"依赖，保证包在任何干净机器上都自包含
+    if not SKIP_BUNDLE:
+        _bundle_system_libs(dest)
 
     # 3) 快速上手
     (dest / "RUN.txt").write_text(
@@ -314,7 +421,12 @@ def main():
     ap.add_argument("--name")
     ap.add_argument("--assemble-only", action="store_true")
     ap.add_argument("--archive", action="store_true")
+    ap.add_argument("--no-bundle-libs", action="store_true",
+                    help="跳过把系统共享库补进便携目录（默认会补）")
     a = ap.parse_args()
+
+    global SKIP_BUNDLE
+    SKIP_BUNDLE = a.no_bundle_libs
 
     out = (ROOT / a.out).resolve()
     name = a.name or f"OwnRender-{platform_name()}-{arch()}"
