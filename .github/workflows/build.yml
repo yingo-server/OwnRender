@@ -130,7 +130,7 @@ jobs:
             --name OwnRender \
             --version 10.0.0 \
             --bootstrap service_only \
-            --requirements python3,numpy,pillow,requests \
+            --requirements python3,numpy==1.26.4,pillow,requests \
             --arch arm64-v8a \
             --dist-name ownrender \
             --android-api 33 \
