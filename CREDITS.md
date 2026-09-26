@@ -74,8 +74,3 @@ Copyright (C) 2025 yingo-server and OwnRender contributors
   please open an Issue.
 - **Background textures** were produced with an AI image model; prompts are
   documented in `background/README.md`.
-
-<!-- binaries-link -->
----
-
-📦 **二进制包**（Windows / Linux / macOS / Android `.so`，由 CI 用 Nuitka 自动构建）—— **下载与使用方式 → [docs/二进制包.md](docs/二进制包.md)**

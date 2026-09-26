@@ -10,7 +10,6 @@ Tiered as **Getting started → Advanced → Reference**.
 |---|---|
 | [quickstart.md](quickstart.md) | Your first render in 5 minutes: TUI and command line |
 | [dependencies.md](dependencies.md) | Required libraries, installation, offline vs online |
-| [binaries.md](binaries.md) | **No Python needed**: CI-built executables for Windows / Linux / macOS, plus Android `.so` (see the geolocation section) |
 
 ## 🟡 Advanced
 
@@ -42,8 +41,3 @@ Tiered as **Getting started → Advanced → Reference**.
 - [../../LICENSE](../../LICENSE) — license text
 - [../../background/README.md](../../background/README.md) — textures
 - [../../fonts/README.md](../../fonts/README.md) — fonts
-
-<!-- binaries-link -->
----
-
-📦 **Binary packages** (Windows / Linux / macOS / Android `.so`, built by CI with Nuitka) — **download & usage → [binaries.md](binaries.md)**

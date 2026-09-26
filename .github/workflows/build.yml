@@ -113,6 +113,8 @@ jobs:
       - name: 构建 + 冒烟测试（容器内完成，产物落在宿主 dist/）
         run: |
           docker run --rm --platform ${{ matrix.platform }} \
+            -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8 \
+            -e PYTHONUTF8=1 -e PYTHONIOENCODING=utf-8 \
             -v "$PWD:/src" -w /src \
             ${{ matrix.image }} bash -lc '
               set -e

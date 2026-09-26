@@ -80,8 +80,3 @@ python main.py --list-fonts
 
 **Q：中文断行怪怪的？**
 断行按标点（`，`）进行，行尾保留逗号。可用显式换行（`\n`）强制分行。
-
-<!-- binaries-link -->
----
-
-📦 **二进制包**（Windows / Linux / macOS / Android `.so`，由 CI 用 Nuitka 自动构建）—— **下载与使用方式 → [../docs/二进制包.md](../docs/二进制包.md)**

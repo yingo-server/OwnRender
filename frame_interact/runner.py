@@ -130,12 +130,10 @@ def _ask_image_path(args):
 # 入口
 # ═══════════════════════════════════════════════════════════════════
 def run(argv=None) -> int:
-    if sys.platform == "win32":
-        try:
-            sys.stdout.reconfigure(encoding="utf-8")
-            sys.stderr.reconfigure(encoding="utf-8")
-        except (AttributeError, OSError):
-            pass
+    # 终端编码兼容：C/POSIX locale（最小化容器 / LANG=C 的服务器）下 stdout 是
+    # ascii，打印中文或 ◆ 会直接崩；Windows 重定向输出也会遇到同类问题。
+    # 这里统一处理：能修则强制 UTF-8，终端认不了 Unicode 符号就整体降级成 ASCII。
+    config.ensure_utf8_stdio()
 
     T.init_term()
     T.init_color(force=True if "--no-color" not in (argv or sys.argv[1:])

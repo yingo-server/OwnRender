@@ -193,6 +193,17 @@ def resolve_location(args, interactive):
             return float(r["lat"]), float(r["lon"]), r["city"], r["name"]
         u.warn("IP 定位不可用")
 
+    # ── 已保存的位置（--set-location / 设置面板存过）优先于 IP 估算 ──
+    # IP 定位取的是"网络出口 IP"的城市，走代理/VPN 时会落到出口节点上，
+    # 因此有已保存位置时不再盲目采信 IP。
+    saved = astro.load_device_location()
+    if saved:
+        s_lat, s_lon, s_city, s_src = saved
+        if not str(s_src).lower().startswith("ip"):
+            u.field("已保存位置", f"{s_city} ({s_lat:.4f}, {s_lon:.4f})  来源 {s_src}")
+            if not interactive or u.ask_yn("采用？", "y"):
+                return s_lat, s_lon, s_city, s_src
+
     if not args.no_gps:
         gps = astro.try_system_gps()
         if gps:
@@ -203,6 +214,8 @@ def resolve_location(args, interactive):
                 return lat, lon, city, src
 
     if not args.no_gps:
+        u.warn("IP 定位用的是【网络出口 IP】的城市；走代理/VPN 会落到出口节点，"
+               "若结果不对请用 --set-location 纬度,经度,城市名 固定位置")
         services = config.GEO_SERVICES
         if args.geo_service:
             services = [s for s in config.GEO_SERVICES
@@ -375,11 +388,15 @@ def list_bgs():
 
 def _light_label(light) -> str:
     """把内部代号翻译成人话（`none` 多数是「太阳在窗后→天光漫射」，直接显示会像故障）。"""
-    return {"sun": "太阳直射", "moon": "月光", "twilight": "暮光"}.get(
-        light.source,
-        "天光漫射（太阳在窗户背面）"
-        if getattr(light, "ambient_irradiance", 0.0) > 0.003
-        else "无直射（夜间基础环境光）")
+    txt = {"sun": "太阳直射", "moon": "月光", "twilight": "暮光"}.get(light.source)
+    if txt:
+        return txt
+    # 兜底：不再写死"太阳在窗户背面"（真实原因可能是云量/夜间/地平线下）
+    amb = getattr(light, "ambient_irradiance", 0.0)
+    if amb <= 0.003:
+        return "无直射（夜间基础环境光）"
+    reason = (getattr(light, "visibility_reason", "") or "").strip()
+    return f"天光漫射（{reason}）" if reason else "天光漫射"
 
 
 def _irr_text(light) -> str:
@@ -481,7 +498,7 @@ def run_bg_lit_generate(args, interactive=True) -> int:
     if _loc is None:
         u.err("位置解析失败")
         return 1
-    lat, lon, city, _ = _loc
+    lat, lon, city, loc_src = _loc
     weather, _ = resolve_weather(args, lat, lon, interactive)
 
     u.h("光照参数")
@@ -641,7 +658,11 @@ def run_bg_lit_generate(args, interactive=True) -> int:
     u.field("模式", "内置底图 + 光线追踪光照")
     u.field("底图", bg_path.name)
     u.field("时间", local_time.strftime("%Y-%m-%d %H:%M:%S %Z"))
-    u.field("位置", f"{city} ({lat:.4f}, {lon:.4f})")
+    u.field("UTC", local_time.astimezone(datetime.timezone.utc)
+            .strftime("%Y-%m-%d %H:%M:%S"))
+    _sun_alt = float(getattr(light, "sun_alt", 0.0))
+    u.field("太阳高度", f"{_sun_alt:+.1f}°（{'白天' if _sun_alt > 0 else '夜间'}）")
+    u.field("位置", f"{city} ({lat:.4f}, {lon:.4f})  来源 {loc_src}")
     u.field("天气", f"{weather.description} 云{weather.cloud}%")
     u.field("光源",
             f"{_light_label(light)} 方位{light.az:+.1f}° 高度{light.alt:+.1f}°")

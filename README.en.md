@@ -210,8 +210,3 @@ Asset takedown requests ([DMCA]) or commercial licensing: open an **Issue**.
 
 > 📌 The program and CLI still use the historical name `agnes-render` (banner,
 > `--help` prog name); it is the same project as the OwnRender repository.
-
-<!-- binaries-link -->
----
-
-📦 **Binary packages** (Windows / Linux / Android `.so`; x86 / x86_64 / arm64 / armv7, built by CI with Nuitka) — **download & usage → [docs/en/binaries.md](docs/en/binaries.md)**

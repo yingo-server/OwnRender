@@ -60,7 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("窗户几何")
     g.add_argument("--window-orientation",
-                   choices=config.WINDOW_ORIENTATIONS, default=None)
+                   choices=config.WINDOW_ORIENTATIONS, default=None,
+                   help="窗户朝向：left/right（左=朝西 右=朝东）"
+                        "或罗盘 n/ne/e/se/s/sw/w/nw")
     g.add_argument("--window-side", choices=["left", "right"], default=None,
                    help=argparse.SUPPRESS)
     g.add_argument("--window-scale", type=float, default=None)

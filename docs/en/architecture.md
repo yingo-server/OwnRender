@@ -201,8 +201,3 @@ Runtime overrides: `config.TEXT_MATERIAL_COUPLING`,
 - Window orientation supports only `left`/`right` (west/east); no north/south yet.
 - AI mode paints an already-lit wall and does **not** run the ray tracer, so it
   is physically less consistent than offline mode.
-
-<!-- binaries-link -->
----
-
-📦 **Binary packages** (Windows / Linux / macOS / Android `.so`, built by CI with Nuitka) — **download & usage → [binaries.md](binaries.md)**

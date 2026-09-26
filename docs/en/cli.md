@@ -242,8 +242,3 @@ python main.py --offline-bg 白色乳胶漆 --exposure 1.15 --saturation 0.9 -y
 # device location + live weather
 python main.py --offline-bg 微水泥 --gps --weather auto -y
 ```
-
-<!-- binaries-link -->
----
-
-📦 **Binary packages** (Windows / Linux / macOS / Android `.so`, built by CI with Nuitka) — **download & usage → [binaries.md](binaries.md)**

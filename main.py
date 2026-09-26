@@ -25,6 +25,7 @@ def run_args(argv=None) -> int:
     只解析参数并执行，不进入交互 TUI。
     """
     import config
+    config.ensure_utf8_stdio()          # 先保证终端编码不会让输出崩掉
     config.ensure_config_files()
     import frame_interact
     if argv is None:
@@ -35,6 +36,7 @@ def run_args(argv=None) -> int:
 def main() -> int:
     # 1. 初始化配置（首次生成 / 缺失键自动补全）
     import config
+    config.ensure_utf8_stdio()          # 先保证终端编码不会让输出崩掉
     config.ensure_config_files()
     # 2. 引入交互子框架（它内部会引入 light / render）
     import frame_interact

@@ -24,6 +24,199 @@ import numpy as np
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 终端编码兼容层（最小必要：不改任何渲染 / 交互 / 布局逻辑）
+#   ① 输出强制 UTF-8 + errors=replace —— 任何环境都不再因编码抛异常
+#   ② Windows 控制台代码页切 65001 —— cmd / PowerShell 中文不再乱码
+#   ③ locale 是 C/POSIX（终端多半不认框线）—— 框线符号降级为 ASCII，宽度 1:1 不错位
+#   ④ C locale 下中文文件名 / 参数是"代理转义"字符 —— 打印前还原；
+#      交给 Pillow 前也还原（Pillow 只接受能被 utf-8 编码的字符串）
+# ═══════════════════════════════════════════════════════════════════
+_ASCII_GLYPHS = (
+    ("─", "-"), ("═", "="), ("│", "|"), ("━", "-"),
+    ("┌", "+"), ("┐", "+"), ("└", "+"), ("┘", "+"),
+    ("├", "+"), ("┤", "+"), ("┬", "+"), ("┴", "+"), ("┼", "+"),
+    ("◆", "*"), ("▸", ">"), ("·", "-"), ("…", "~"),
+    ("✓", "v"), ("✔", "v"), ("✗", "x"), ("✘", "x"),
+    ("█", "#"), ("▒", ":"), ("░", "."), ("→", "->"), ("←", "<-"),
+)
+
+_STDIO_DONE = False
+_TERM_UNICODE = True
+
+
+def _decode_escapes(text):
+    """把代理转义（surrogateescape）字符串还原成真正的 UTF-8 文本。"""
+    if not isinstance(text, str) or not text:
+        return text
+    for ch in text:
+        if "\udc80" <= ch <= "\udcff":
+            break
+    else:
+        return text                      # 不含代理转义，原样返回
+    for enc in (sys.getfilesystemencoding(), "ascii", "utf-8"):
+        try:
+            return text.encode(enc, "surrogateescape").decode("utf-8", "replace")
+        except Exception:
+            continue
+    return text
+
+
+def _fix_path_arg(obj):
+    """路径参数（str / Path）统一还原成可被 utf-8 编码的字符串。"""
+    if isinstance(obj, str):
+        return _decode_escapes(obj)
+    if isinstance(obj, os.PathLike):
+        try:
+            return _decode_escapes(os.fspath(obj))
+        except Exception:
+            return obj
+    return obj
+
+
+def _locale_tag():
+    """按 POSIX 优先级取生效的 locale（LC_ALL > LC_CTYPE > LANG > LANGUAGE）。"""
+    for k in ("LC_ALL", "LC_CTYPE", "LANG"):
+        v = (os.environ.get(k) or "").strip()
+        if v:
+            return v.lower()
+    return (os.environ.get("LANGUAGE") or "").strip().lower()
+
+
+class _EncStream:
+    """stdout / stderr 包装：还原代理转义 +（哑终端里）降级框线符号。"""
+
+    def __init__(self, stream, degrade: bool):
+        self._s = stream
+        self._degrade = bool(degrade)
+
+    def write(self, text):
+        if isinstance(text, str) and text:
+            text = _decode_escapes(text)
+            if self._degrade:
+                for a, b in _ASCII_GLYPHS:
+                    if a in text:
+                        text = text.replace(a, b)
+        return self._s.write(text)
+
+    def flush(self):
+        return self._s.flush()
+
+    def writable(self):
+        return True
+
+    def __getattr__(self, name):         # isatty / fileno / buffer / encoding …
+        return getattr(self._s, name)
+
+
+def _win_console_utf8():
+    """Windows：控制台代码页切 UTF-8(65001)，否则 UTF-8 字节被当 GBK 解 = 乱码。"""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        if not k.GetConsoleOutputCP():    # 0 = 输出被重定向，不动系统状态
+            return False
+        k.SetConsoleOutputCP(65001)
+        k.SetConsoleCP(65001)
+        return True
+    except Exception:
+        return False
+
+
+def _patch_pillow_encoding():
+    """Pillow 拿到代理转义字符串会在内部 encode('utf-8') 时崩掉（中文文件名 / 文本）。
+
+    只在 Pillow 入口还原"传参副本"，不改引擎持有的原字符串，
+    因此不影响任何文件系统语义（os.path / open 依旧按原样工作）。
+    """
+    try:
+        from PIL import ImageFont
+    except Exception:
+        return
+    try:
+        _init = ImageFont.FreeTypeFont.__init__
+
+        def _init2(self, font=None, *a, **kw):
+            return _init(self, _fix_path_arg(font), *a, **kw)
+
+        ImageFont.FreeTypeFont.__init__ = _init2
+    except Exception:
+        pass
+    for meth in ("getmask", "getmask2", "getbbox", "getlength", "getsize"):
+        try:
+            orig = getattr(ImageFont.FreeTypeFont, meth, None)
+            if orig is None or getattr(orig, "_enc_wrapped", False):
+                continue
+
+            def _wrap(fn):
+                def wrapped(self, text, *a, **kw):
+                    return fn(self, _decode_escapes(text), *a, **kw)
+                wrapped._enc_wrapped = True
+                return wrapped
+
+            setattr(ImageFont.FreeTypeFont, meth, _wrap(orig))
+        except Exception:
+            continue
+
+
+def ensure_utf8_stdio():
+    """强制 UTF-8 输出；返回终端是否认 Unicode 框线符号。幂等，可重复调用。"""
+    global _STDIO_DONE, _TERM_UNICODE
+    if _STDIO_DONE:
+        return _TERM_UNICODE
+    _STDIO_DONE = True
+
+    # ① 输出一律 UTF-8 + errors=replace：任何字符都不会再抛 UnicodeEncodeError
+    for name in ("stdout", "stderr"):
+        s = getattr(sys, name, None)
+        if s is None:
+            continue
+        try:
+            s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    # ② Windows 控制台切 65001（与强制 UTF-8 配套，cmd / PowerShell 才不乱码）
+    win = _win_console_utf8()
+
+    # ③ 终端认不认框线符号
+    tag = _locale_tag()
+    if os.environ.get("OWNRENDER_ASCII"):
+        _TERM_UNICODE = False
+    elif os.environ.get("OWNRENDER_UNICODE"):
+        _TERM_UNICODE = True
+    elif win:
+        _TERM_UNICODE = True              # 控制台已按 UTF-8 工作
+    elif not tag:
+        _TERM_UNICODE = True              # locale 未设置：按现代终端处理
+    elif "utf-8" in tag or "utf8" in tag:
+        _TERM_UNICODE = True
+    elif tag in ("c", "posix") or tag.startswith("c."):
+        _TERM_UNICODE = False             # 明确的 C/POSIX：降级成 ASCII
+    else:
+        _TERM_UNICODE = True
+
+    # ④ 文件系统编码不是 UTF-8（C locale）时：修输出 + 修 Pillow 入口的转义
+    try:
+        fs_utf8 = (sys.getfilesystemencoding() or "").lower() in ("utf-8", "utf8")
+    except Exception:
+        fs_utf8 = False
+    if not fs_utf8 or not _TERM_UNICODE:
+        for name in ("stdout", "stderr"):
+            s = getattr(sys, name, None)
+            if s is None or isinstance(s, _EncStream):
+                continue
+            try:
+                setattr(sys, name, _EncStream(s, not _TERM_UNICODE))
+            except Exception:
+                pass
+    if not fs_utf8:
+        _patch_pillow_encoding()
+    return _TERM_UNICODE
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 版本
 # ═══════════════════════════════════════════════════════════════════
 VERSION = "10.0.0"
@@ -142,12 +335,23 @@ SIZE_MAP = {
     ("3K","21:9"):"4032x1728",("4K","21:9"):"5376x2304",
 }
 
-WINDOW_ORIENTATIONS = ["left", "right"]
+# 窗户朝向：left/right 为历史写法（左=朝西 270°，右=朝东 90°），
+# 另外支持真实罗盘 n/ne/e/se/s/sw/w/nw（正北 0°，顺时针）。
+WINDOW_ORIENTATIONS = ["left", "right",
+                       "n", "ne", "e", "se", "s", "sw", "w", "nw"]
 WINDOW_ORIENTATION_ALIAS = {
-    "w": "left", "west": "left", "n": "left", "nw": "left", "sw": "left",
-    "e": "right", "east": "right", "s": "right", "ne": "right", "se": "right",
+    # 英文全称 → 简写（简写本身已是合法朝向，必须原样透传，
+    # 之前把 s 映射成 right(朝东)、n 映射成 left(朝西) 是错的）
+    "north": "n", "south": "s", "east": "e", "west": "w",
+    "northeast": "ne", "northwest": "nw",
+    "southeast": "se", "southwest": "sw",
+    "l": "left", "r": "right",
 }
-WINDOW_SIDE_AZ = {"left": 270, "right": 90}
+WINDOW_SIDE_AZ = {
+    "left": 270, "right": 90,
+    "n": 0, "ne": 45, "e": 90, "se": 135,
+    "s": 180, "sw": 225, "w": 270, "nw": 315,
+}
 
 WEATHER_TYPES = ["auto", "clear", "cloudy", "overcast", "rain", "snow", "haze"]
 WEATHER_PRESETS = {
@@ -587,6 +791,7 @@ def _read_json(path: Path, default: dict) -> dict:
 
 def ensure_config_files(force: bool = False) -> Tuple[bool, List[str]]:
     """首次运行生成 config/，缺失键自动补全。"""
+    ensure_utf8_stdio()          # 任何入口走到这里之前，输出就已安全
     created = False
     all_missing = []
     for path, default in [

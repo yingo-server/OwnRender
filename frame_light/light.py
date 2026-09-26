@@ -72,19 +72,22 @@ def _relative_az(source_az, win_side):
     return rel
 
 
-def _sun_visibility(sun_alt, sun_az, win_side, cloud):
+def _sun_visibility(sun_alt, sun_az, win_side, cloud, vis_m=20000.0):
     if sun_alt <= -6:
         return False, f"太阳在地平线下（alt={sun_alt:.1f}°）"
     if sun_alt < 0:
         return True, "暮光阶段"
     az_rel = _relative_az(sun_az, win_side)
     if abs(az_rel) > 100:
-        side = "左" if win_side == "left" else "右"
+        win_az_dbg = config.WINDOW_SIDE_AZ.get(win_side, 90)
         return False, (f"太阳在窗户背面（相对方位 {az_rel:+.0f}°，"
-                       f"窗户朝{side}）")
-    if cloud > 95:
-        return False, f"云量 {cloud:.0f}%，阳光被完全遮挡"
-    return True, "阳光可达"
+                       f"窗户朝向 {win_side}={win_az_dbg:.0f}°）")
+    # 云量不用 95% 一刀切：厚云正午仍有约 10% 直射/散射光，
+    # 一刀切会把白天渲成黑图。这里改为看"直射辐照度是否可忽略"。
+    irr = astro.solar_irradiance(sun_alt, cloud, vis_m)
+    if irr < 0.0005:
+        return False, f"云量 {cloud:.0f}%，直射光极弱（{irr:.4f}）"
+    return True, f"阳光可达（云量 {cloud:.0f}%，直射 {irr:.3f}）"
 
 
 def _moon_visibility(moon_alt, moon_az, phase, cloud, win_side):
@@ -94,15 +97,15 @@ def _moon_visibility(moon_alt, moon_az, phase, cloud, win_side):
         return False, f"月亮高度角仅 {moon_alt:.1f}°，被地平线/建筑遮挡"
     az_rel = _relative_az(moon_az, win_side)
     if abs(az_rel) > 100:
-        side = "左" if win_side == "left" else "右"
+        win_az_dbg = config.WINDOW_SIDE_AZ.get(win_side, 90)
         return False, (f"月亮在窗户背面（相对方位 {az_rel:+.0f}°，"
-                       f"窗户朝{side}）")
+                       f"窗户朝向 {win_side}={win_az_dbg:.0f}°）")
     bf = astro.moon_brightness_factor(phase)
     if bf < 0.15:
         return False, (f"月相 {phase:.2f}，接近新月，"
                        f"月光极弱（brightness={bf:.2f}）")
-    if cloud > 85:
-        return False, f"云量 {cloud:.0f}%，月光被云层完全遮挡"
+    if astro.moon_irradiance(moon_alt, phase, cloud) < 0.0005:
+        return False, f"云量 {cloud:.0f}%，月光极弱"
     return True, "月光可达"
 
 
@@ -133,7 +136,8 @@ def compute_light(lat, lon, dt, weather,
     config.LOG.param("天气", f"cloud={weather.cloud}% vis={weather.vis}m")
 
     # ── 太阳优先 ──
-    sun_vis, sun_reason = _sun_visibility(sun_alt, sun_az, win, weather.cloud)
+    sun_vis, sun_reason = _sun_visibility(sun_alt, sun_az, win,
+                                         weather.cloud, weather.vis)
     if sun_vis:
         L.is_night = (sun_alt <= 0)
         if sun_alt > 0:
