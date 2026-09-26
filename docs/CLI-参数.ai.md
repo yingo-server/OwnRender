@@ -114,7 +114,7 @@
 
 | 参数 | 取值 | 默认 | 语义 | 交互/注意 | 示例 |
 |---|---|---|---|---|---|
-| `--weather` | auto/clear/cloudy/overcast/rain/snow/haze | — | 天气预设，影响云量/能见度/湿度/降水，进而影响光照强度与色偏。 | 预设值会被 --cloud/--precip/--visibility/--humidity 逐个覆盖；auto = 调 API 查询（需联网/定位） | `--weather clear` |
+| `--weather` | auto/clear/cloudy/overcast/shower/rain/thunder/snow/haze/fog | — | 天气预设，只提供**物理输入量**（云量/能见度/湿度/降水/气温/WMO 码）；光的性质（直射漫射比、硬度、湿面、地面反弹、曝光适应）全部由 frame_light/atmosphere.py 从这些物理量推导，不再有手调风格表。 | 预设值会被 --cloud/--precip/--visibility/--humidity 逐个覆盖；auto = 调 API 查询（含天气码与气温） | `--weather shower` |
 | `--cloud` | float | — | 云量（百分，0=晴）→ 削弱直射光，增强漫射。 | 覆盖 --weather 预设 | `--cloud 80` |
 | `--precip` | float | — | 降水强度（0~100）→ 受影响的可达性/湿润感。 | — | `--precip 60` |
 | `--visibility` | float | — | 能见度（米，越大越通透；预设晴天为 20000）。 | — | `--visibility 5000` |
@@ -245,7 +245,7 @@
 - `aspect`: `1:1`, `3:4`, `4:3`, `16:9`, `9:16`, `2:3`, `3:2`, `21:9`
 - `anchor`: `center`, `tl`, `tr`, `bl`, `br`, `tc`, `bc`, `lc`, `rc`
 - `window_orientation`: `left`, `right`, `n`, `ne`, `e`, `se`, `s`, `sw`, `w`, `nw`
-- `weather`: `auto`, `clear`, `cloudy`, `overcast`, `rain`, `snow`, `haze`
+- `weather`: `auto`, `clear`, `cloudy`, `overcast`, `shower`, `rain`, `thunder`, `snow`, `haze`, `fog`
 - `font_ext`: `.otc`, `.otf`, `.ttc`, `.ttf`, `.woff`, `.woff2`
 - `image_ext`: `.bmp`, `.jpeg`, `.jpg`, `.png`, `.webp`
 

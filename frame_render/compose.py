@@ -78,6 +78,50 @@ def _apply_sensor_curve(I_out, strength=0.05):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 天气光质后处理（对比度 / 饱和度 / 色偏）
+# ═══════════════════════════════════════════════════════════════════
+def apply_look(I_linear: np.ndarray, light,
+               exposure=1.0, saturation=1.0) -> np.ndarray:
+    """按天气施加「光的质感」——这是旧实现完全缺失的一环。
+
+    旧实现里天气只改一个总亮度：晴/多云/阴/雨/雪彼此的**对比度、饱和、
+    色温**完全一样，所以"雨天"和"阴天"渲染出来几乎分不出来。
+
+    处理（在 sRGB 感知域做，符合观感）：
+      · contrast   真 S 曲线：向 smoothstep 靠拢 → 暗的更暗、亮的更亮，
+                   中灰不动（不是简单的线性拉伸，不会硬剪）
+      · sat        饱和度倍率（湿表面更艳；雾/雪更灰）
+      · cool       冷色偏（阴/雨/雪偏蓝，晴/霾偏中性或暖）
+    最后再叠用户自己的曝光倍数（线性域）。
+    """
+    ct = float(getattr(light, "contrast", 1.0) or 1.0)
+    st = float(getattr(light, "saturation", 1.0) or 1.0) * float(saturation)
+    cool = float(getattr(light, "cool", 0.0) or 0.0)
+    ex = float(exposure if exposure is not None else 1.0)
+
+    need = (abs(ct - 1.0) > 1e-3 or abs(st - 1.0) > 1e-3
+            or cool > 1e-4 or abs(ex - 1.0) > 1e-4)
+    if not need:
+        return I_linear
+
+    s = utils.linear_to_srgb(I_linear)
+    if abs(ct - 1.0) > 1e-3:
+        s_curve = s * s * (3.0 - 2.0 * s)          # smoothstep
+        s = s + (s_curve - s) * (ct - 1.0)         # ct>1 加对比，<1 变平
+    if abs(st - 1.0) > 1e-3:
+        gray = s.mean(axis=2, keepdims=True)
+        s = gray + (s - gray) * st
+    if cool > 1e-4:
+        s = s * np.array([1.0 - cool * 0.90, 1.0, 1.0 + cool * 0.80],
+                         dtype=np.float32)[None, None, :]
+    s = np.clip(s, 0.0, 1.0)
+    out = utils.srgb_to_linear(s)
+    if abs(ex - 1.0) > 1e-4:
+        out = out * ex
+    return out.astype(np.float32)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 主合成
 # ═══════════════════════════════════════════════════════════════════
 def synthesize(R_clean: np.ndarray,

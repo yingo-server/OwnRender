@@ -273,16 +273,21 @@ def resolve_weather(args, lat, lon, interactive):
     if override and override != "auto":
         preset = config.WEATHER_PRESETS.get(
             override, config.WEATHER_PRESETS["clear"])
+        # ★ 把预设里的**全部物理量**都接进来：尤其是 temp（决定雨/雪）
+        #   与 code（WMO 天气码）。旧版漏了这两项 → 雪天被判成雨天。
         w = astro.WeatherInfo(
             cloud=cloud if cloud is not None else preset["cloud"],
             vis=vis if vis is not None else preset["vis"],
             humidity=hum if hum is not None else preset.get("humidity", 40),
             precip=precip if precip is not None else preset["precip"],
+            temp=preset.get("temp", 20.0),
+            code=preset.get("code", 0),
             forced_type=override)
         u.ok(f"强制 {config.WEATHER_LABELS.get(override, override)}")
         u.field("云/水/视/湿",
                 f"{w.cloud:.0f}% {w.precip:.1f}mm {w.vis:.0f}m "
                 f"{w.humidity:.0f}%")
+        u.field("气温/天气码", f"{w.temp:.1f}℃  WMO {w.code}")
         return w, "override"
 
     if any(v is not None for v in (cloud, precip, vis, hum)):
@@ -290,7 +295,8 @@ def resolve_weather(args, lat, lon, interactive):
             cloud=cloud if cloud is not None else 0,
             vis=vis if vis is not None else 20000,
             humidity=hum if hum is not None else 40,
-            precip=precip if precip is not None else 0.0)
+            precip=precip if precip is not None else 0.0,
+            temp=20.0)
         u.ok(f"手动 云{w.cloud}% 水{w.precip}mm 视{w.vis}m 湿{w.humidity}%")
         return w, "manual"
 

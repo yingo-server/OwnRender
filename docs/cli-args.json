@@ -161,9 +161,12 @@
       "clear",
       "cloudy",
       "overcast",
+      "shower",
       "rain",
+      "thunder",
       "snow",
-      "haze"
+      "haze",
+      "fog"
     ],
     "font_ext": [
       ".otc",
@@ -186,37 +189,73 @@
       "cloud": 0,
       "vis": 20000,
       "humidity": 40,
-      "precip": 0.0
+      "precip": 0.0,
+      "temp": 25.0,
+      "code": 0
     },
     "cloudy": {
       "cloud": 50,
       "vis": 20000,
       "humidity": 55,
-      "precip": 0.0
+      "precip": 0.0,
+      "temp": 22.0,
+      "code": 2
     },
     "overcast": {
       "cloud": 85,
       "vis": 15000,
       "humidity": 70,
-      "precip": 0.0
+      "precip": 0.0,
+      "temp": 18.0,
+      "code": 3
+    },
+    "shower": {
+      "cloud": 70,
+      "vis": 12000,
+      "humidity": 85,
+      "precip": 0.6,
+      "temp": 20.0,
+      "code": 80
     },
     "rain": {
       "cloud": 80,
       "vis": 8000,
       "humidity": 90,
-      "precip": 2.0
+      "precip": 2.0,
+      "temp": 16.0,
+      "code": 63
+    },
+    "thunder": {
+      "cloud": 92,
+      "vis": 6000,
+      "humidity": 88,
+      "precip": 3.5,
+      "temp": 24.0,
+      "code": 95
     },
     "snow": {
       "cloud": 85,
       "vis": 5000,
       "humidity": 85,
-      "precip": 3.0
+      "precip": 3.0,
+      "temp": -3.0,
+      "code": 73
     },
     "haze": {
       "cloud": 40,
       "vis": 3000,
       "humidity": 70,
-      "precip": 0.0
+      "precip": 0.0,
+      "temp": 15.0,
+      "code": 45
+    },
+    "fog": {
+      "cloud": 60,
+      "vis": 600,
+      "humidity": 96,
+      "precip": 0.0,
+      "temp": 5.0,
+      "code": 45
     }
   },
   "args": [
@@ -969,24 +1008,27 @@
         "auto",
         "clear",
         "cloudy",
+        "fog",
         "haze",
         "overcast",
         "rain",
-        "snow"
+        "shower",
+        "snow",
+        "thunder"
       ],
       "nargs": null,
       "default": null,
       "help": "",
       "hidden": false,
-      "semantics": "天气预设，影响云量/能见度/湿度/降水，进而影响光照强度与色偏。",
+      "semantics": "天气预设，只提供**物理输入量**（云量/能见度/湿度/降水/气温/WMO 码）；光的性质（直射漫射比、硬度、湿面、地面反弹、曝光适应）全部由 frame_light/atmosphere.py 从这些物理量推导，不再有手调风格表。",
       "units": null,
       "interactions": [
         "预设值会被 --cloud/--precip/--visibility/--humidity 逐个覆盖",
-        "auto = 调 API 查询（需联网/定位）"
+        "auto = 调 API 查询（含天气码与气温）"
       ],
-      "example": "--weather clear",
+      "example": "--weather shower",
       "failure_modes": [],
-      "choices_note": "auto/clear/cloudy/overcast/rain/snow/haze"
+      "choices_note": "auto/clear/cloudy/overcast/shower/rain/thunder/snow/haze/fog"
     },
     {
       "group": "天气",

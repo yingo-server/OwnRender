@@ -100,6 +100,11 @@ def compute_penumbra(light, weather):
     if light.source == "moon":
         penumbra_ratio *= 0.7
 
+    # 天气光质「硬度」：在物理半影之上再按天气微调
+    # （hard=1 晴天 → ×1.0；纯漫射天气 hard→0 → 更柔和）
+    hard = float(getattr(light, "hardness", 1.0) or 1.0)
+    penumbra_ratio *= (1.0 + (1.0 - max(0.0, min(1.0, hard))) * 0.8)
+
     light.penumbra_ratio = max(0.002, min(0.08, penumbra_ratio))
     config.LOG.param("半影比例",
                      f"{light.penumbra_ratio:.4f} "

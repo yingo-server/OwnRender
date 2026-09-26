@@ -113,10 +113,12 @@ SEM = {
                            interactions=["一次性动作：执行后 exit 0", "顺带写缓存，不做渲染"],
                            example='--set-location "39.9042,116.4074,北京"',
                            failure=["格式错 → exit 1（行为 lat,lon[,city]）"]),
-    "--weather": dict(semantics="天气预设，影响云量/能见度/湿度/降水，进而影响光照强度与色偏。",
-                      interactions=["预设值会被 --cloud/--precip/--visibility/--humidity 逐个覆盖",
-                                    "auto = 调 API 查询（需联网/定位）"],
-                      example="--weather clear", choices_note="auto/clear/cloudy/overcast/rain/snow/haze"),
+    "--weather": dict(semantics="天气预设，只提供**物理输入量**（云量/能见度/湿度/降水/气温/WMO 码）；"
+                              "光的性质（直射漫射比、硬度、湿面、地面反弹、曝光适应）全部由"
+                               " frame_light/atmosphere.py 从这些物理量推导，不再有手调风格表。",
+                  interactions=["预设值会被 --cloud/--precip/--visibility/--humidity 逐个覆盖",
+                                "auto = 调 API 查询（含天气码与气温）"],
+                  example="--weather shower", choices_note="auto/clear/cloudy/overcast/shower/rain/thunder/snow/haze/fog"),
     "--cloud": dict(semantics="云量（百分，0=晴）→ 削弱直射光，增强漫射。", units="0~100", interactions=["覆盖 --weather 预设"], example="--cloud 80"),
     "--precip": dict(semantics="降水强度（0~100）→ 受影响的可达性/湿润感。", units="0~100", interactions=[], example="--precip 60"),
     "--visibility": dict(semantics="能见度（米，越大越通透；预设晴天为 20000）。", units="米", interactions=[], example="--visibility 5000"),

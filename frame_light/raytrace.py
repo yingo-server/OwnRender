@@ -33,6 +33,7 @@ import config
 from . import utils
 from . import scene3d as s3
 from . import astro
+from . import atmosphere
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -91,6 +92,14 @@ def trace_scene(W: int, H: int,
     roughness = mat_work["roughness"]
     specular_tex = mat_work["specular"]
     is_water = mat_work["is_water"]
+
+    # 湿面响应（雨/雪/雾）：表面被水膜覆盖 → 变暗、变光、镜面增强
+    _wet = float(getattr(light, "wet", 0.0) or 0.0)
+    if _wet > 0.001:
+        albedo = albedo * (1.0 - 0.28 * _wet)
+        roughness = np.clip(roughness * (1.0 - 0.55 * _wet), 0.03, 1.0)
+        specular_tex = specular_tex + _wet * 0.50
+        config.LOG.param("湿面响应", f"wet={_wet:.2f}（albedo↓/粗糙度↓/镜面↑）")
 
     # ══════════════════════════════════════════════════════════
     # 阶段 4：太阳方向与颜色
@@ -191,6 +200,15 @@ def trace_scene(W: int, H: int,
     ambient = albedo * (ambient_color[None, None, :] * ambient_strength)
 
     # ══════════════════════════════════════════════════════════
+    # 阶段 9.5：窗口孔径衰减（让漫射光也有空间结构）
+    # ══════════════════════════════════════════════════════════
+    rep(progress, 0.89, "窗口孔径衰减")
+    apert = _aperture_falloff(scene, P, valid, work_W, work_H, cfg)
+    ambient = ambient * apert[..., None]
+    config.LOG.param("孔径衰减",
+                     f"min={float(apert.min()):.3f} max={float(apert.max()):.3f}")
+
+    # ══════════════════════════════════════════════════════════
     # 阶段 10：合成
     # ══════════════════════════════════════════════════════════
     rep(progress, 0.92, "合成")
@@ -198,6 +216,9 @@ def trace_scene(W: int, H: int,
 
     # 无效区域用环境光兜底
     I_traced = np.where(valid[..., None], I_traced, ambient)
+
+    # 空气光幕（雾/雨/雪的散射介质）
+    I_traced = _add_airlight(I_traced, light, weather, cfg)
 
     I_traced = np.clip(I_traced, 0.0, None).astype(np.float32)
 
@@ -302,39 +323,66 @@ def _water_reflection(P, normal, V, L_to_sun,
 def _ambient_terms(light, weather, cfg):
     """返回 (ambient_color (3,), ambient_strength scalar)。
 
-    天光（天空漫射）强度来自 astro.sky_irradiance，随太阳高度角与云量
-    变化；用于修正“白天无直射 = 夜间量级”的缺陷。
+    环境光直接复用 LightResult.ambient_irradiance / ambient_color：
+      · 白天 = 天光漫射（随太阳高度、云量变化）
+      · 夜间 = 夜空辉光 + 月光散射（随月亮高度/月相/云量变化）
+
+    再乘上「地面反弹」：雪地/湿地把落到地面的光反打回墙面。
+    【旧实现的缺陷】雪天没有这一项 → 雪天渲染得比晴天还暗 2.4 倍（物理反了）。
     """
-    sun_alt = float(getattr(light, "sun_alt", light.alt) or 0.0)
-    sky = astro.sky_irradiance(sun_alt, weather.cloud)   # 夜=0，白天>0
-
-    if light.source == "sun":
-        sky_c = np.array([0.55, 0.68, 1.00], dtype=np.float32)
-        ground = np.array([1.00, 0.85, 0.65], dtype=np.float32)
-        mix = 0.6
-        color = mix * sky_c + (1.0 - mix) * ground
-        strength = max(0.06, sky)
-    elif light.source == "twilight":
-        color = np.array([0.75, 0.60, 0.55], dtype=np.float32)
-        strength = 0.08
-    elif light.source == "moon":
-        color = np.array([0.55, 0.68, 0.95], dtype=np.float32)
-        strength = 0.04
-    elif sky > 0.0:
-        # 白天但无直射光：墙面完全由天光漫射照亮
-        color = astro.sky_color(sun_alt)
-        strength = max(0.06, sky)
-    else:
-        # 真夜间且无直射
-        color = np.array([0.50, 0.55, 0.75], dtype=np.float32)
-        strength = 0.02
-
+    color = np.asarray(getattr(light, "ambient_color",
+                               np.array([0.5, 0.6, 0.85], dtype=np.float32)),
+                       dtype=np.float32)
+    strength = float(getattr(light, "ambient_irradiance", 0.0) or 0.0)
+    if strength <= 0.0:
+        # 兜底：老调用方/单测可能不带这个字段
+        sun_alt = float(getattr(light, "sun_alt", light.alt) or 0.0)
+        if sun_alt > 0.0:
+            strength = max(0.02, astro.sky_irradiance(sun_alt, weather.cloud))
+        else:
+            strength = 0.01
     color = color / max(float(color.mean()), 1e-6)
-    from_sky = (light.source == "sun"
-                or (light.source == "none" and sky > 0.0))
-    if weather.cloud > 50 and not from_sky:
-        strength *= (1.0 - 0.4 * (weather.cloud - 50) / 50.0)
+
+    # 地面反弹（雪 0.45 / 湿 0.08）：间接光被地面反射放大
+    bounce = float(getattr(light, "bounce", 0.06) or 0.0)
+    strength *= (1.0 + bounce)
     return color, float(strength)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 窗口孔径照度（纯几何）
+# ═══════════════════════════════════════════════════════════════════
+def _aperture_falloff(scene, P, valid, W, H, cfg):
+    """窗口作为面光源的照度场（**纯几何推导，无手调参数**）。
+
+    物理：E ∝ A_win · cosθ_win · cosθ_wall / r²（见 atmosphere.aperture_illuminance）
+    归一化：均值归一 —— 只重新分配光，不改变总曝光。
+
+    旧实现里环境光是 `albedo * color * strength` 一个常数，
+    于是只要没有直射光斑（阴/雨/雪/雾），整张图就是一块平灰。
+    """
+    e = atmosphere.aperture_illuminance(P, scene, valid)
+    return np.clip(e, 1e-4, 1e4).astype(np.float32)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 空气光幕（散射介质）
+# ═══════════════════════════════════════════════════════════════════
+def _add_airlight(I_out, light, weather, cfg):
+    """空气光：A = A∞·(1 − e^(−β·L))，β = 3.912 / 能见度。
+
+    ⚠ 真实结论：室内光程只有几米，雾天也只有百分之几 —— 这一项**本来就该很小**。
+    旧实现完全没有它（这是缺项）；但不该为了"雾感"把它硬凑成 0.2 量级（那是不真实）。
+    空气感主要应来自窗外景物的消光，而不是室内这一段光程。
+    """
+    amt = float(getattr(light, "airlight", 0.0) or 0.0)
+    if amt <= 1e-6:
+        return I_out
+    col = np.asarray(getattr(light, "ambient_color",
+                             np.array([0.6, 0.7, 1.0], dtype=np.float32)),
+                     dtype=np.float32)
+    col = col / max(float(col.mean()), 1e-6)
+    return (I_out + col[None, None, :] * amt).astype(np.float32)
 
 
 # ═══════════════════════════════════════════════════════════════════

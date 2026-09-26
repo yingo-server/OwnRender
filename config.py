@@ -353,19 +353,43 @@ WINDOW_SIDE_AZ = {
     "s": 180, "sw": 225, "w": 270, "nw": 315,
 }
 
-WEATHER_TYPES = ["auto", "clear", "cloudy", "overcast", "rain", "snow", "haze"]
+WEATHER_TYPES = ["auto", "clear", "cloudy", "overcast", "shower", "rain",
+                 "thunder", "snow", "haze", "fog"]
 WEATHER_PRESETS = {
-    "clear":    {"cloud": 0,  "vis": 20000, "humidity": 40, "precip": 0.0},
-    "cloudy":   {"cloud": 50, "vis": 20000, "humidity": 55, "precip": 0.0},
-    "overcast": {"cloud": 85, "vis": 15000, "humidity": 70, "precip": 0.0},
-    "rain":     {"cloud": 80, "vis": 8000,  "humidity": 90, "precip": 2.0},
-    "snow":     {"cloud": 85, "vis": 5000,  "humidity": 85, "precip": 3.0},
-    "haze":     {"cloud": 40, "vis": 3000,  "humidity": 70, "precip": 0.0},
+    # 这里全部是**物理输入量**（不是"风格参数"）：
+    #   cloud 云量% / vis 能见度m / humidity 湿度% / precip 降水mm·h⁻¹
+    #   temp 气温℃（决定雨还是雪！旧版缺这一项，导致"雪天"被判成"雨天"）
+    #   code WMO 天气码（用于复用同一套分类逻辑）
+    "clear":    {"cloud": 0,  "vis": 20000, "humidity": 40, "precip": 0.0,
+                 "temp": 25.0, "code": 0},
+    "cloudy":   {"cloud": 50, "vis": 20000, "humidity": 55, "precip": 0.0,
+                 "temp": 22.0, "code": 2},
+    "overcast": {"cloud": 85, "vis": 15000, "humidity": 70, "precip": 0.0,
+                 "temp": 18.0, "code": 3},
+    # 阵雨：云在开开合合，太阳时不时露脸（不是"整体变暗"）
+    "shower":   {"cloud": 70, "vis": 12000, "humidity": 85, "precip": 0.6,
+                 "temp": 20.0, "code": 80},
+    "rain":     {"cloud": 80, "vis": 8000,  "humidity": 90, "precip": 2.0,
+                 "temp": 16.0, "code": 63},
+    "thunder":  {"cloud": 92, "vis": 6000,  "humidity": 88, "precip": 3.5,
+                 "temp": 24.0, "code": 95},
+    # 雪：气温必须在 0℃ 以下，才可能触发"雪地反照率 0.8 + 地面反弹"
+    "snow":     {"cloud": 85, "vis": 5000,  "humidity": 85, "precip": 3.0,
+                 "temp": -3.0, "code": 73},
+    "haze":     {"cloud": 40, "vis": 3000,  "humidity": 70, "precip": 0.0,
+                 "temp": 15.0, "code": 45},
+    "fog":      {"cloud": 60, "vis": 600,   "humidity": 96, "precip": 0.0,
+                 "temp": 5.0,  "code": 45},
 }
 WEATHER_LABELS = {
     "auto": "自动（API 查询）", "clear": "晴", "cloudy": "多云",
-    "overcast": "阴", "rain": "雨", "snow": "雪", "haze": "雾霾",
+    "overcast": "阴", "shower": "阵雨", "rain": "雨",
+    "thunder": "雷阵雨", "snow": "雪", "haze": "雾霾", "fog": "雾",
 }
+
+# 注：天气的「光质」（硬度/湿面/地面反弹/空气光/对比/饱和/色偏）**不在这里**，
+# 全部由 frame_light/atmosphere.py 从物理量推导（cloud/precip/temp/vis + 几何）。
+# 这里只保留"场景预设"——即天气的物理输入量（云量/能见度/湿度/降水）。
 
 ANCHORS = ["center", "tl", "tr", "bl", "br", "tc", "bc", "lc", "rc"]
 DEFAULT_ANCHOR = "center"
@@ -693,6 +717,11 @@ FACTORY_LIGHTING = {
     "shadow_blue_tint":        0.06,
     "sensor_curve_strength":   0.05,
 
+    # ── 天气/曝光的参数**不在这里** ──────────────────────────────
+    # 物理常数与全局可调参数统一放在 frame_light/atmosphere.py
+    # （全局手调参数共 5 个，其余全部由 cloud/precip/temp/vis + 几何推导）。
+
+
     "penumbra_max_ratio":      0.015,
     "penumbra_sigma_divisor":  1.5,
 
@@ -727,6 +756,26 @@ FACTORY_LIGHTING = {
             "noise_mult": 3.5, "transmission_mult": 2.0, "scatter_mult": 0.8,
             "bloom_mult": 3.0, "smudge_abs": 40, "water_abs": 20,
             "dust_mult": 0.3, "caustics_mult": 0.3, "aged_mult": 1.0,
+            "kill_grid": True,
+        },
+        # 阵雨：雨一阵一阵，玻璃上有水痕但间隙能透光 → 不完全 kills 窗格
+        "shower": {
+            "noise_mult": 2.5, "transmission_mult": 2.0, "scatter_mult": 0.9,
+            "bloom_mult": 2.5, "smudge_abs": 30, "water_abs": 12,
+            "dust_mult": 0.5, "caustics_mult": 0.5, "aged_mult": 1.0,
+            "kill_grid": False,
+        },
+        # 雷阵雨：云底黑、雨急，但云缝里会漏下硬光
+        "thunder": {
+            "noise_mult": 4.0, "transmission_mult": 1.5, "scatter_mult": 0.7,
+            "bloom_mult": 3.5, "smudge_abs": 45, "water_abs": 25,
+            "dust_mult": 0.3, "caustics_mult": 0.2, "aged_mult": 1.0,
+            "kill_grid": False,
+        },
+        "fog": {
+            "noise_mult": 3.0, "transmission_mult": 3.5, "scatter_mult": 0.6,
+            "bloom_mult": 3.0, "smudge_abs": 35, "water_abs": 10,
+            "dust_mult": 2.0, "caustics_mult": 0.2, "aged_mult": 1.0,
             "kill_grid": True,
         },
         "snow": {

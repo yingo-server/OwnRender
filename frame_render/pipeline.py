@@ -182,6 +182,13 @@ def generate_lit_wall(wall_img: Image.Image,
 
     t0 = time.time()
     aces_gain = float(cfg.get("aces_gain", 1.25))
+    # ── 曝光适应（必须在 ACES 之前，线性域）──────────────────────────
+    # 没有这一步：阴雨天照度只有晴天的 ~1/3，画面就直接是 1/3 亮 → "阴暗"。
+    ev = float(getattr(light, "exposure_ev", 1.0) or 1.0)
+    if abs(ev - 1.0) > 1e-3:
+        I_traced = I_traced * ev
+        config.LOG.param("曝光适应",
+                         f"EV={ev:.3f}（照度 E={float(getattr(light, 'illuminance', 0.0)):.4f}）")
     I_out = utils.aces_tonemap_with_gain(I_traced, gain=aces_gain)
     config.LOG.timing("ACES", t0)
     config.LOG.param("I_out max", f"{float(I_out.max()):.4f}")
@@ -200,7 +207,7 @@ def generate_lit_wall(wall_img: Image.Image,
     config.LOG.timing("相机效果", t0)
 
     # ══════════════════════════════════════════════════════════
-    # 阶段 5.5：画面微调（曝光 / 饱和度，线性域）
+    # 阶段 5.5：画面微调（天气光质 + 用户曝光/饱和度）
     # ══════════════════════════════════════════════════════════
     ex = config.VISUAL_EXPOSURE
     sat = config.VISUAL_SATURATION
@@ -208,14 +215,17 @@ def generate_lit_wall(wall_img: Image.Image,
         ex = float(config._defaults_or("visual_exposure", 1.0))
     if sat is None:
         sat = float(config._defaults_or("visual_saturation", 1.0))
-    if abs(ex - 1.0) > 1e-4 or abs(sat - 1.0) > 1e-4:
-        lum = I_out.mean(axis=2, keepdims=True)
-        if abs(sat - 1.0) > 1e-4:
-            I_out = lum + (I_out - lum) * sat
-        if abs(ex - 1.0) > 1e-4:
-            I_out = I_out * ex
-        I_out = np.clip(I_out, 0.0, None)
-        config.LOG.param("画面微调", f"曝光={ex:.3f} 饱和={sat:.3f}")
+
+    # 天气光质：对比度 / 饱和度 / 冷色偏（sRGB 域）+ 用户曝光（线性域）
+    I_out = compose.apply_look(I_out, light, exposure=ex, saturation=sat)
+    if (abs(float(getattr(light, "contrast", 1.0)) - 1.0) > 1e-3
+            or abs(float(getattr(light, "saturation", 1.0)) - 1.0) > 1e-3
+            or float(getattr(light, "cool", 0.0) or 0.0) > 1e-4):
+        config.LOG.param("天气光质后处理",
+                         f"对比={float(getattr(light, 'contrast', 1.0)):.2f} "
+                         f"饱和={float(getattr(light, 'saturation', 1.0)):.2f} "
+                         f"冷偏={float(getattr(light, 'cool', 0.0)):.2f}")
+    I_out = np.clip(I_out, 0.0, None)
 
     # ══════════════════════════════════════════════════════════
     # 阶段 6：编码

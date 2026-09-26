@@ -1,0 +1,166 @@
+name: Render timelapse
+
+# 在 GitHub Actions 上**生成并渲染**全天延时（不用本地机器）
+#   1) 拉取最近一次 Release 里的 linux-x86_64 包
+#   2) 用 tools/day_timelapse.py 逐帧渲染（步长可调）
+#   3) 用 ffmpeg 拼成视频（每张 N 秒）
+#   4) 上传 frames/ (可选) 与 mp4 作为 artifact
+#
+# 触发：手动 workflow_dispatch（也可以被其它 workflow 调用）
+on:
+  workflow_dispatch:
+    inputs:
+      text:
+        description: "文案"
+        default: "朝闻道"
+        required: false
+      bg:
+        description: "底图（材质）"
+        default: "微水泥"
+        required: false
+      weather:
+        description: "天气（物理输入：clear/cloudy/overcast/shower/rain/thunder/snow/haze/fog）"
+        default: "clear"
+        required: false
+      step_min:
+        description: "步长（分钟/张）"
+        default: "3"
+        required: false
+      fps:
+        description: "视频帧率（1 = 每张 1 秒）"
+        default: "1"
+        required: false
+      resolution:
+        description: "分辨率档"
+        default: "2K"
+        required: false
+      aspect:
+        description: "画面比例"
+        default: "16:9"
+        required: false
+      ssaa:
+        description: "超采样倍数（1 最快）"
+        default: "1"
+        required: false
+      jobs:
+        description: "并行帧数"
+        default: "4"
+        required: false
+      stagger:
+        description: "错峰启动间隔（秒）"
+        default: "8"
+        required: false
+      font:
+        description: "字体名（留空=包内第一个；务必显式指定以免逐帧随机）"
+        default: "AaXiuKai-2"
+        required: false
+      date:
+        description: "日期 YYYY-MM-DD（留空=今天）"
+        default: ""
+        required: false
+      limit:
+        description: "只渲染前 N 帧（调试用，0=全天）"
+        default: "0"
+        required: false
+      upload_frames:
+        description: "是否连原始帧一起上传（体积大）"
+        default: "false"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 1) 取最近一次 Release 里的 Linux x86_64 包 ──────────────────
+      - name: 下载 Release 里的 linux-x86_64 包
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          mkdir -p pkg
+          tag=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
+          echo "Release: $tag"
+          gh release download "$tag" \
+            --pattern 'OwnRender-linux-x86_64*' --dir pkg || \
+          gh release download "$tag" \
+            --pattern 'OwnRender-linux-*' --dir pkg
+          ls -la pkg
+          cd pkg
+          for f in *.tar.gz *.tgz; do
+            [ -f "$f" ] && tar -xzf "$f"
+          done
+          ls -la
+
+      - name: 安装依赖（渲染 + 拼视频）
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python3 -m pip install --quiet numpy pillow
+
+      - name: 找到可执行文件
+        id: find
+        run: |
+          set -e
+          EXE=$(find pkg -maxdepth 3 -type f -name 'ownrender' | head -1)
+          echo "exe=$EXE"
+          chmod +x "$EXE"
+          "$EXE" --version
+          echo "exe=$EXE" >> "$GITHUB_OUTPUT"
+
+      # ── 2) 逐帧渲染一整天 ──────────────────────────────────────────
+      - name: 渲染全天（步长 ${{ inputs.step_min }} 分钟）
+        env:
+          EXE: ${{ steps.find.outputs.exe }}
+        run: |
+          set -e
+          ARGS="--jobs ${{ inputs.jobs }} --stagger ${{ inputs.stagger }} \
+                --weather ${{ inputs.weather }} --font '${{ inputs.font }}' \
+                --step-min ${{ inputs.step_min }} --fps ${{ inputs.fps }} \
+                -r ${{ inputs.resolution }} -a ${{ inputs.aspect }} \
+                --ssaa ${{ inputs.ssaa }} --bg '${{ inputs.bg }}' \
+                --text '${{ inputs.text }}' \
+                --out dist/timelapse"
+          [ -n "${{ inputs.date }}" ] && ARGS="$ARGS --date ${{ inputs.date }}"
+          [ "${{ inputs.limit }}" != "0" ] && ARGS="$ARGS --limit ${{ inputs.limit }}"
+          echo "python3 tools/day_timelapse.py $ARGS"
+          eval python3 tools/day_timelapse.py $ARGS --engine "$EXE"
+
+      # ── 3) 拼成视频（每张 = 1/fps 秒）──────────────────────────────
+      - name: ffmpeg 拼帧 → day.mp4
+        run: |
+          set -e
+          ls dist/timelapse/frames | head -3
+          n=$(ls dist/timelapse/frames/f*_final.png | wc -l)
+          echo "帧数：$n"
+          ffmpeg -y -framerate ${{ inputs.fps }} \
+            -i dist/timelapse/frames/f%04d_final.png \
+            -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+            -c:v libx264 -pix_fmt yuv420p -crf 18 -r 30 \
+            -movflags +faststart dist/timelapse/day.mp4
+          ffprobe -v error -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 dist/timelapse/day.mp4
+
+      - name: 上传视频
+        uses: actions/upload-artifact@v4
+        with:
+          name: timelapse-${{ inputs.weather }}-${{ inputs.step_min }}min
+          path: |
+            dist/timelapse/day.mp4
+            dist/timelapse/progress.json
+            dist/timelapse/timeline.tsv
+            dist/timelapse/make_video.sh
+          retention-days: 30
+
+      - name: 上传原始帧（可选）
+        if: ${{ inputs.upload_frames == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: timelapse-frames-${{ inputs.weather }}
+          path: dist/timelapse/frames/
+          retention-days: 7

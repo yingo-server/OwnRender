@@ -146,15 +146,144 @@ def air_mass_kasten_young(alt_deg: float) -> float:
     return min(am, 40.0)
 
 
-def _mie_tau(cloud: float, vis_m: float) -> float:
-    """Mie 光学厚度（气溶胶，与波长近似无关）。"""
+def _mie_tau(vis_m: float) -> float:
+    """Mie 光学厚度（**仅气溶胶**，与波长近似无关）。
+
+    【旧实现的问题】把 cloud 当成 Mie 气溶胶塞进 tau：
+        tau += (cloud/100)**1.5 * 1.8
+    云不是气溶胶。云量 80% 时 tau≈1.44 → 直射被 exp(-1.44·am) 灭掉，
+    而漫射只降 30%：结果是"多云/阴/雨都只是整体变暗"，而不是"光变软、
+    太阳时隐时现"。云的直射削减改由 cloud_direct_transmittance() 负责。
+    """
     tau = 0.05
-    if cloud > 0:
-        tau += (cloud / 100.0) ** 1.5 * 1.8
-    if vis_m < 20000:
-        vis_ratio = max(0.1, vis_m / 20000.0)
-        tau += -math.log(vis_ratio) * 0.15
+    vis = max(200.0, float(vis_m))
+    # Koschmieder：能见度越低，气溶胶光学厚度越大
+    vis_ratio = max(0.02, min(1.0, vis / 20000.0))
+    tau += -math.log(vis_ratio) * 0.15
     return tau
+
+
+def cloud_direct_transmittance(cloud: float) -> float:
+    """云层对**直射太阳光**的透过率（两流近似）。
+
+    T_dir = exp(-k · c^p)，k=2.0，p=1.4：
+        c=0.00 → 1.00   晴
+        c=0.50 → 0.47   多云：直射还留近一半，光斑变软变淡
+        c=0.85 → 0.20   阴：几乎只剩漫射
+        c=1.00 → 0.14   厚阴
+    """
+    c = max(0.0, min(1.0, float(cloud) / 100.0))
+    K, P = 2.0, 1.4
+    return float(math.exp(-K * (c ** P)))
+
+
+# 云量 → 天光漫射倍率（薄云把直射转成漫射，会**增强**环境光；
+# 厚阴云整体削弱）。写成表而不是公式，是为了可读、可测、可调。
+_CLOUD_DIFFUSE_TABLE = ((0.00, 1.00), (0.30, 1.18), (0.60, 1.35),
+                        (0.80, 1.15), (1.00, 0.72))
+
+
+def sky_diffuse_factor(cloud: float) -> float:
+    """云量对天光漫射的倍率（分段线性插值，见 _CLOUD_DIFFUSE_TABLE）。"""
+    c = max(0.0, min(1.0, float(cloud) / 100.0))
+    tab = _CLOUD_DIFFUSE_TABLE
+    for i in range(len(tab) - 1):
+        c0, f0 = tab[i]
+        c1, f1 = tab[i + 1]
+        if c <= c1:
+            t = 0.0 if c1 <= c0 else (c - c0) / (c1 - c0)
+            return float(f0 + (f1 - f0) * t)
+    return float(tab[-1][1])
+
+
+# ═══════════════════════════════════════════════════════════════════
+# WMO 天气码 → 天气类型（API 的 code 之前完全没用上）
+# ═══════════════════════════════════════════════════════════════════
+WMO_CATEGORY = {
+    0: "clear", 1: "clear", 2: "cloudy", 3: "overcast",
+    45: "fog", 48: "fog",
+    51: "rain", 53: "rain", 55: "rain", 56: "rain", 57: "rain",
+    61: "rain", 63: "rain", 65: "rain", 66: "rain", 67: "rain",
+    71: "snow", 73: "snow", 75: "snow", 77: "snow",
+    80: "shower", 81: "shower", 82: "shower",
+    85: "snow", 86: "snow",
+    95: "thunder", 96: "thunder", 99: "thunder",
+}
+
+
+def categorize_code(code) -> str:
+    """WMO code → 内部天气类型（未知返回 ""）。"""
+    try:
+        return WMO_CATEGORY.get(int(code), "")
+    except (TypeError, ValueError):
+        return ""
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 阵雨 / 雷阵雨的「间歇性」
+# ═══════════════════════════════════════════════════════════════════
+def _hash01(salt: int, k: int) -> float:
+    """确定性哈希 → [0,1)。同一输入永远同一输出（可复现）。"""
+    h = (int(k) * 2654435761 + int(salt) * 40503) & 0xFFFFFFFF
+    h ^= h >> 15
+    h = (h * 2246822519) & 0xFFFFFFFF
+    h ^= h >> 13
+    return ((h >> 8) & 0xFFFFFF) / float(0x1000000)
+
+
+def _vnoise(salt: int, minutes: float, period_min: float) -> float:
+    """时间轴上的值噪声（平滑插值），用于"云开云合"。"""
+    x = minutes / max(1.0, float(period_min))
+    i0 = math.floor(x)
+    f = x - i0
+    a = _hash01(salt, i0)
+    b = _hash01(salt, i0 + 1)
+    s = f * f * (3.0 - 2.0 * f)          # smoothstep
+    return a + (b - a) * s
+
+
+def shower_dynamics(dt, cloud: float, precip: float, kind: str = "shower"):
+    """阵雨/雷阵雨的间歇性：返回 (cloud_eff, precip_eff, burst)。
+
+    阵雨不是"一直下的小雨"，而是**云在开合**：一阵雨、一阵停，
+    太阳在云缝里漏下来。这里用 dt 的确定性噪声建模，所以：
+      · 同一时刻重跑结果一致（可复现、可续跑）
+      · 一整天的帧序列里，雨会有起有落（延时视频才好看）
+
+    burst ∈ [0,1]：1 = 雨最急、云最厚；0 = 云开、太阳露脸。
+    cloud_eff 在 burst=0 时**低于**基准云量（这才是"露太阳"）：
+        cloud_eff = c·(0.40 + 0.60·burst) + (100-c)·0.55·burst
+        c=70（阵雨基准）→ burst=0: 28%（放晴）→ burst=1: 86%（乌云）
+    """
+    if dt is None:
+        return float(cloud), float(precip), 0.0
+    minutes = dt.hour * 60.0 + dt.minute + dt.second / 60.0
+    salt = 91 if kind == "shower" else 137
+    period = 26.0 if kind == "shower" else 17.0
+    burst = _vnoise(salt, minutes, period)
+    if kind == "thunder":
+        burst = min(1.0, burst ** 0.7 * 1.15)      # 雷阵雨更尖
+    c = max(0.0, min(100.0, float(cloud)))
+    p = max(0.0, float(precip))
+    cloud_eff = min(100.0, c * (0.40 + 0.60 * burst) + (100.0 - c) * 0.55 * burst)
+    precip_eff = p * (0.15 + 2.60 * burst)
+    return float(cloud_eff), float(precip_eff), float(burst)
+
+
+def vis_transmittance(vis_m: float, alt_deg: float) -> float:
+    """能见度（气溶胶/雾霾）对**太阳辐射**的透过率。
+
+    Koschmieder 关系给出消光系数，配合 Kasten-Young 大气质量：
+        τ_a = −ln(V/20000)·0.15 ,  T = e^(−τ_a·am)
+
+    这一步让"能见度"这个 API 字段真正参与计算（旧实现只把它当作
+    补丁项塞进 Mie tau，和云混在一起，语义不清）。
+    """
+    vis = max(200.0, float(vis_m))
+    if vis >= 20000.0:
+        return 1.0
+    tau_a = -math.log(max(0.02, min(1.0, vis / 20000.0))) * 0.15
+    return float(math.exp(-tau_a * air_mass_kasten_young(max(0.1, alt_deg))))
 
 
 def solar_irradiance(alt_deg, cloud=0.0, vis_m=20000.0) -> float:
@@ -197,11 +326,13 @@ def solar_irradiance_rgb(alt_deg, cloud=0.0, vis_m=20000.0) -> np.ndarray:
     tau_r_g = _rayleigh(550.0)
     tau_r_b = _rayleigh(450.0)
 
-    tau_m = _mie_tau(cloud, vis_m)
+    tau_m = _mie_tau(vis_m)
+    # 云层整层遮挡：削直射（不分波长）。与气溶胶的 tau 分开处理。
+    T_cloud = cloud_direct_transmittance(cloud)
 
-    T_r = math.exp(-(tau_r_r + tau_m) * am)
-    T_g = math.exp(-(tau_r_g + tau_m) * am)
-    T_b = math.exp(-(tau_r_b + tau_m) * am)
+    T_r = math.exp(-(tau_r_r + tau_m) * am) * T_cloud
+    T_g = math.exp(-(tau_r_g + tau_m) * am) * T_cloud
+    T_b = math.exp(-(tau_r_b + tau_m) * am) * T_cloud
 
     if alt_deg < 8.0:
         extra = (8.0 - alt_deg) / 8.0 * 0.5
@@ -231,8 +362,26 @@ def sky_irradiance(sun_alt: float, cloud=0.0) -> float:
         return 0.0
     c = max(0.0, min(100.0, float(cloud)))
     base = SKY_MAX * (math.sin(math.radians(sun_alt)) ** 0.60)
-    cloud_f = 1.0 - 0.70 * ((c / 100.0) ** 1.8)
-    return base * max(0.05, cloud_f)
+    # 云把直射转成漫射：薄云时天光反而更亮，厚阴云才整体削弱
+    return base * sky_diffuse_factor(c)
+
+
+def night_sky_irradiance(moon_alt: float, phase: float, cloud=0.0) -> float:
+    """夜空照明：城市辉光 / 星光背景 + 月光散射。返回环境光强度。
+
+    【旧实现的问题】夜间环境光是常数 0.02，与月亮高度、月相、云量全无关
+    → 00:00 和 04:00 渲染出的图**逐像素相同**，整段夜景是静止画面。
+    """
+    c = max(0.0, min(1.0, float(cloud) / 100.0))
+    # 1) 夜空辉光（城市光害 + 星光）：厚云会挡住大部分
+    skyglow = 0.008 * (1.0 - 0.55 * c)
+    # 2) 月光经大气/云层散射后的漫射照明
+    moon_amb = 0.0
+    if moon_alt > 0.0:
+        m = moon_brightness_factor(phase)
+        alt_n = max(0.0, min(1.0, float(moon_alt) / 60.0)) ** 0.7
+        moon_amb = 0.035 * m * alt_n * (1.0 - 0.60 * c)
+    return float(skyglow + moon_amb)
 
 
 def sky_color(sun_alt: float) -> np.ndarray:
