@@ -147,9 +147,24 @@ def trace_scene(W: int, H: int,
     N_dot_L = np.sum(normal * L_to_sun[None, None, :], axis=-1)
     N_dot_L = np.maximum(N_dot_L, 0.0) * visible_f
 
+    # ── 窗户入射余弦（Lambert）────────────────────────────────
+    # 【真 bug】is_visible_through_window 只判"能不能穿过去"（二元），
+    # 没有乘入射角余弦。于是太阳几乎与窗面平行（掠射，cosθ→0）时，
+    # 本该几乎没有直射进屋，却照样投出大片光斑。
+    # 透过窗户的辐射通量 ∝ 窗的**投影面积** = A·cosθ。
+    win_side = str(getattr(scene, "win_side", "right")).lower()
+    win_normal = np.array([1.0 if win_side.startswith("r") else -1.0,
+                           0.0, 0.0], dtype=np.float64)
+    cos_inc = float(np.dot(L_to_sun, win_normal))
+    cos_inc = max(0.0, cos_inc)
+    config.LOG.param("窗户入射余弦",
+                     f"{cos_inc:.3f}（太阳与窗面法线夹角 "
+                     f"{math.degrees(math.acos(min(1.0, max(-1.0, float(np.dot(L_to_sun, win_normal)))))):.1f}°）")
+    beam_scale = sun_irradiance * cos_inc
+
     diffuse = albedo * (sun_color_rgb[None, None, :]
                         * N_dot_L[..., None]
-                        * sun_irradiance)
+                        * beam_scale)
 
     # ══════════════════════════════════════════════════════════
     # 阶段 7：Cook-Torrance 镜面
@@ -180,7 +195,7 @@ def trace_scene(W: int, H: int,
     specular_term = (sun_color_rgb[None, None, :]
                      * (spec_brdf * spec_tex_factor)[..., None]
                      * visible_f[..., None]
-                     * sun_irradiance)
+                     * beam_scale)          # 同样受窗户入射余弦调制
 
     # ══════════════════════════════════════════════════════════
     # 阶段 8：水面反射
@@ -353,16 +368,23 @@ def _ambient_terms(light, weather, cfg):
 # 窗口孔径照度（纯几何）
 # ═══════════════════════════════════════════════════════════════════
 def _aperture_falloff(scene, P, valid, W, H, cfg):
-    """窗口作为面光源的照度场（**纯几何推导，无手调参数**）。
+    """窗口开口的照度场（**矩形面光源面积分**）＋ 室内互反射均匀底。
 
-    物理：E ∝ A_win · cosθ_win · cosθ_wall / r²（见 atmosphere.aperture_illuminance）
-    归一化：均值归一 —— 只重新分配光，不改变总曝光。
+    两层叠加（这正是"环境光之上还叠了多种因素"里的关键一层）：
+      1. 窗口直入：E(P) = ∫∫_窗面 L·cosθ_win·cosθ_wall/r² dA（面积分）
+      2. 室内互反射：光在墙面/地面反复弹射后的**近似均匀底** k=ρ/(1-ρ)
 
-    旧实现里环境光是 `albedo * color * strength` 一个常数，
-    于是只要没有直射光斑（阴/雨/雪/雾），整张图就是一块平灰。
+    混合后**均值归一**（只重新分配光，不改总曝光）：
+        f = (E/mean(E) + k) / (1 + k)
+    k=1.22 时明暗比从 6:1 压到 2.2:1 —— 这才符合"天空主导时几乎铺满整个房间"。
     """
     e = atmosphere.aperture_illuminance(P, scene, valid)
-    return np.clip(e, 1e-4, 1e4).astype(np.float32)
+    k = atmosphere.interreflection_floor()
+    f = (e + k) / (1.0 + k)
+    config.LOG.param("照度场",
+                     f"窗口直入 {float(e.min()):.2f}~{float(e.max()):.2f}，"
+                     f"互反射底 k={k:.2f} → 混合后 {float(f.min()):.2f}~{float(f.max()):.2f}")
+    return np.clip(f, 1e-4, 1e4).astype(np.float32)
 
 
 # ═══════════════════════════════════════════════════════════════════
