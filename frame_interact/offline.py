@@ -321,15 +321,22 @@ def resolve_weather(args, lat, lon, interactive):
 
 def pick_text(args, interactive):
     u.h("文字内容")
-    if args.text:
+    # 【修 bug】显式传了 --text / -t（哪怕是空串）就**原样使用**。
+    # 旧实现：空/空白 → 悄悄塞进示例句「谎如昨日，嗤笑今朝」，
+    # 于是"我想渲染一张不带字的墙"根本做不到，而且会污染对照实验。
+    if args.text is not None:
         text = args.text
     elif not interactive:
         text = "谎如昨日，嗤笑今朝"
     else:
         text = u.ask("文字", "谎如昨日，嗤笑今朝")
     if not text or not text.strip():
-        text = "谎如昨日，嗤笑今朝"
-        u.warn("空文字用默认")
+        if args.text is None:
+            text = "谎如昨日，嗤笑今朝"
+            u.warn("空文字用默认")
+        else:
+            text = ""                       # 显式空 → 不叠字
+            u.field("文字", "（关闭：显式给了空文本）")
     u.ok(text)
     return text
 
