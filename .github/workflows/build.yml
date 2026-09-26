@@ -319,8 +319,17 @@ jobs:
       - name: 提取 .so
         run: |
           mkdir -p android-so/${{ matrix.abi }}
-          APK=$(find dist -name '*.apk' | head -1)
-          if [ -z "$APK" ]; then echo "找不到 APK，dist 内容："; ls -laR dist | head -40; exit 1; fi
+          # p4a 2023.9.16 把 APK 放在 dists/<dist>/build/outputs/apk/debug/ 下，
+          # 不再落 dist/。两个位置都找，避免"构建成功却找不到包"。
+          P4A_DISTS="$HOME/.local/share/python-for-android/dists"
+          APK=$(find . "$P4A_DISTS" -name '*.apk' 2>/dev/null \
+                | grep -v '/_apk/' | head -1)
+          if [ -z "$APK" ]; then
+            echo "找不到 APK，候选如下："
+            find . "$P4A_DISTS" -name '*.apk' 2>/dev/null | head -20
+            ls -laR dist 2>/dev/null | head -20
+            exit 1
+          fi
           echo "APK = $APK"
           unzip -o "$APK" 'lib/*' -d _apk
           cp -v _apk/lib/${{ matrix.abi }}/*.so android-so/${{ matrix.abi }}/
@@ -370,7 +379,9 @@ jobs:
   # ══════════════════════════════════════════════════════════════
   release:
     name: release
-    needs: [docs]
+    # 等所有平台 job 结束（不论成败）再收集产物发布；谁成功收谁。
+    # Release 固定用同一 nightly 标签滚动更新，重跑本 job 即可追加/覆盖资产。
+    needs: [docs, linux-native, linux-32bit, windows, android]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -431,3 +442,4 @@ jobs:
           make_latest: ${{ startsWith(github.ref, 'refs/tags/') }}
           files: out/*
           fail_on_unmatched_files: false
+          overwrite_files: true
