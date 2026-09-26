@@ -301,6 +301,51 @@ jobs:
           # APK 的 assets/_python_bundle 里，只有带上 APK 才是可用的整套运行时。
           cp -v "$APK" OwnRender-android-${{ matrix.abi }}.apk
           ls -la OwnRender-android-${{ matrix.abi }}.apk
+
+          # ── 把 p4a dist 里的 site-packages / libs 一起交付 ────────────
+          # 事实：APK 的 lib/<abi>/*.so 只有 9 个，libpybundle.so 里是 569 个
+          # stdlib .pyc，assets/private.tar 只是本项目代码 —— 也就是说 p4a
+          # 虽然日志显示 "Installing numpy/Pillow into site-packages"，
+          # 但这些模块并没有出现在 APK 里。这里把 dist 里的相应目录一并打包，
+          # 并打印诊断，免得"构建成功≠能跑"再发生一次。
+          DIST="$P4A_DISTS/ownrender-${{ matrix.abi }}"
+          echo "== p4a dist：$DIST"
+          ls -la "$DIST" 2>/dev/null || true
+          echo "== dist 内 numpy / Pillow 相关（最多 20 条）"
+          find "$DIST" -maxdepth 5 \( -name '*numpy*' -o -name '*_imaging*' \) 2>/dev/null | head -20 || true
+          echo "== dist/libs/${{ matrix.abi }} 的 .so 数"
+          ls "$DIST/libs/${{ matrix.abi }}" 2>/dev/null | wc -l || true
+          ls "$DIST/libs/${{ matrix.abi }}" 2>/dev/null | head -12 || true
+          mkdir -p "android-so/${{ matrix.abi }}/p4a-dist"
+          for SRC in "$DIST/_python_bundle" "$DIST/site-packages" "$DIST/libs/${{ matrix.abi }}"; do
+            if [ -d "$SRC" ]; then
+              echo "打包 $SRC"
+              cp -r "$SRC" "android-so/${{ matrix.abi }}/p4a-dist/" || true
+            fi
+          done
+          du -sh "android-so/${{ matrix.abi }}/p4a-dist" 2>/dev/null || true
+          # 兜底：不论 p4a 把它们放在哪一层，按目录名把 numpy / PIL 连同
+          # 依赖（*.so）原样捞进包里 —— 这就是"手动补"的正解：
+          # 模块早就编好了，只是没被 APK 打包，我们从 dist 里直接取。
+          find "$DIST" -maxdepth 6 -type d \( -name numpy -o -name PIL \) 2>/dev/null \
+            | while read -r d; do
+                REL="${d#$DIST/}"
+                mkdir -p "android-so/${{ matrix.abi }}/p4a-dist/$(dirname "$REL")"
+                cp -r "$d" "android-so/${{ matrix.abi }}/p4a-dist/$(dirname "$REL")/" || true
+                echo "捞入 $REL"
+              done
+          # 再兜一次：dist 里任何 *multiarray* / *_imaging* / *.so 的模块文件
+          find "$DIST" -maxdepth 7 -type f \( -name '*_multiarray*' -o -name '*_imaging*' \) 2>/dev/null \
+            | head -50 | while read -r f; do
+                REL="${f#$DIST/}"
+                mkdir -p "android-so/${{ matrix.abi }}/p4a-dist/$(dirname "$REL")"
+                cp "$f" "android-so/${{ matrix.abi }}/p4a-dist/$(dirname "$REL")/" || true
+              done
+          du -sh "android-so/${{ matrix.abi }}/p4a-dist" 2>/dev/null || true
+          echo "== 捞完之后包内的 numpy / PIL 命中 =="
+          find "android-so/${{ matrix.abi }}/p4a-dist" \( -name '*numpy*' -o -name '*_imaging*' \) 2>/dev/null \
+            | head -10 || true
+          echo "命中数：$(find "android-so/${{ matrix.abi }}/p4a-dist" \( -name '*numpy*' -o -name '*_imaging*' \) 2>/dev/null | wc -l)"
           printf '%s\n' \
             "Android 交付物（参数模式）" \
             "=========================" \

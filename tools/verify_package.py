@@ -183,8 +183,16 @@ def _verify_android(a):
             except Exception as e:
                 bundle = {"error": "gzip 解压失败：%s" % e}
         notes.append("so.zip 内 _python_bundle：%s" % bundle)
+        # zip 里的普通条目（p4a-dist/… 下会带出 site-packages）
+        zip_hits = {w: sum(1 for n in names if w in n.lower()) for w in want}
+        for w, c in zip_hits.items():
+            if c:
+                notes.append("so.zip 条目命中 %s ×%d（例：%s）"
+                             % (w, c, [n for n in names if w in n.lower()][0]))
     else:
         problems.append("没有可检查的 .so 包：%s" % a.android_so_zip)
+        zip_hits = {w: 0 for w in want}
+        names = []
 
     # ② 完整 APK：numpy/Pillow 的模块可能在普通条目、也可能嵌在内部归档里
     if a.android_apk and os.path.exists(a.android_apk):
@@ -224,20 +232,33 @@ def _verify_android(a):
                 nested["%s@%s" % (w, where)] = c
         apk["scanned_archives"] = scanned
         apk["nested_hits"] = nested
-        hit_numpy = apk["plain_hits"]["numpy"] or apk["plain_hits"]["_multiarray"] \
-            or any(k.startswith(("numpy", "_multiarray")) for k in nested)
-        hit_pil = apk["plain_hits"]["_imaging"] or any(k.startswith("_imaging") for k in nested)
-        if not hit_numpy:
-            problems.append("APK 里找不到 numpy 模块（普通条目与内嵌归档都查过了）")
-        if not hit_pil:
-            problems.append("APK 里找不到 Pillow 的 _imaging")
     else:
-        problems.append("没有提供 APK 一起验收（--android-apk）")
+        apk = {}
+        notes.append("未提供 APK（--android-apk 未给或文件不存在），只按 .so 包判定")
+
+    # ③ 汇总：numpy / _imaging 只要出现在**任一**来源即算补齐
+    #    （.so 包普通条目 / _python_bundle 内层 / APK 普通条目 / APK 内嵌归档）
+    numpy_src = [k for k, v in zip_hits.items() if v and k in ("numpy", "_multiarray")]
+    numpy_src += [k for k in (apk.get("nested_hits") or {})
+                  if k.startswith(("numpy", "_multiarray"))]
+    numpy_src += ["apk:" + k for k, v in (apk.get("plain_hits") or {}).items()
+                  if v and k in ("numpy", "_multiarray")]
+    pil_src = [k for k, v in zip_hits.items() if v and k == "_imaging"]
+    pil_src += [k for k in (apk.get("nested_hits") or {}) if k.startswith("_imaging")]
+    pil_src += ["apk:" + k for k, v in (apk.get("plain_hits") or {}).items()
+                if v and k == "_imaging"]
+    if not numpy_src:
+        problems.append("numpy 模块：.so 包条目、_python_bundle 内层与 APK 内嵌归档里都没找到")
+    if not pil_src:
+        problems.append("Pillow 的 _imaging：同上，都没找到")
+    notes.append("numpy 命中来源：%s" % (numpy_src[:3] or "无"))
+    notes.append("Pillow 命中来源：%s" % (pil_src[:3] or "无"))
 
     verdict = "PASS" if not problems else "FAIL"
     with open(os.path.join(out_dir, "meta.json"), "w", encoding="utf-8") as f:
         json.dump({"platform": "android", "arch": a.arch, "verdict": verdict,
-                   "native": native, "bundle": bundle, "apk": apk,
+                   "native": native, "bundle": bundle, "zip_hits": zip_hits, "apk": apk,
+                   "numpy_src": numpy_src, "pillow_src": pil_src,
                    "problems": problems, "notes": notes}, f,
                   ensure_ascii=False, indent=2)
     with open(os.path.join(out_dir, "summary.txt"), "w", encoding="utf-8") as f:
