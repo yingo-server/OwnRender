@@ -95,6 +95,8 @@ jobs:
   android:
     name: android-so (arm64-v8a)
     runs-on: ubuntu-22.04
+    # p4a 打包 numpy 较慢，给足时间；失败不影响其它平台与发布
+    timeout-minutes: 60
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -111,7 +113,7 @@ jobs:
       - name: 安装 Android SDK / NDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-34 build-tools;34.0.0 ndk;25.2.9519653'
+          packages: 'platform-tools platforms;android-33 platforms;android-34 build-tools;33.0.2 build-tools;34.0.0 ndk;25.2.9519653'
 
       - name: 安装 python-for-android
         run: |
@@ -131,18 +133,18 @@ jobs:
             --requirements python3,numpy,pillow,requests \
             --arch arm64-v8a \
             --dist-name ownrender \
+            --android-api 33 \
+            --debug \
             --sdk-dir "$ANDROID_HOME" \
-            --ndk-dir "$ANDROID_HOME/ndk/25.2.9519653" \
-            --release || echo "P4A_BUILD_FAILED=1" >> "$GITHUB_ENV"
+            --ndk-dir "$ANDROID_HOME/ndk/25.2.9519653"
 
       - name: 提取 .so
-        if: env.P4A_BUILD_FAILED != '1'
         run: |
           mkdir -p android-so/arm64-v8a
           APK=$(ls dist/ownrender/*.apk | head -1)
           echo "APK = $APK"
-          unzip -o "$APK" 'lib/*' -d _apk || true
-          cp -v _apk/lib/arm64-v8a/*.so android-so/arm64-v8a/ || true
+          unzip -o "$APK" 'lib/*' -d _apk
+          cp -v _apk/lib/arm64-v8a/*.so android-so/arm64-v8a/
           ls -la android-so/arm64-v8a/ | head -20
           printf '%s\n' \
             "Android .so 使用方式（参数模式）" \
@@ -153,13 +155,15 @@ jobs:
             "必须在同一 Python-for-Android 运行时里加载，详见" \
             "docs/二进制包.md → Android(.so)" \
             > android-so/README.txt
+          # 打成 zip：Release 汇总按 *.zip 收集产物，目录形式收不进去
+          (cd android-so && zip -r ../OwnRender-android-arm64-v8a-so.zip .)
+          ls -la OwnRender-android-arm64-v8a-so.zip
 
       - name: 上传 .so
-        if: env.P4A_BUILD_FAILED != '1'
         uses: actions/upload-artifact@v4
         with:
-          name: android-so
-          path: android-so/**
+          name: OwnRender-android-arm64-v8a-so
+          path: OwnRender-android-arm64-v8a-so.zip
           retention-days: 14
 
   # ══════════════════════════════════════════════════════════════
@@ -186,7 +190,8 @@ jobs:
   # ══════════════════════════════════════════════════════════════
   release:
     name: release
-    needs: [desktop, docs]
+    # android 放进 needs 只为「等它一起发」；它的结果不参与判定（失败也照发）
+    needs: [desktop, docs, android]
     if: always() && github.event_name != 'pull_request' && needs.desktop.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -201,7 +206,6 @@ jobs:
       - name: 组装发布文件
         run: |
           mkdir -p out
-          cp -v OwnRender-docs.zip out/ 2>/dev/null || true
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) \
                -exec cp -v {} out/ \;
           ls -la out/
@@ -223,6 +227,7 @@ jobs:
             echo "|---|---|"
             for f in out/OwnRender-*.tar.gz out/OwnRender-*.zip; do
               [ -e "$f" ] || continue
+              case "$f" in *docs*) continue ;; esac
               echo "| \`$(basename "$f")\` | $(basename "$f" | sed -E 's/OwnRender-([a-z0-9_]+-[a-z0-9_]+).*/\1/') |"
             done
             echo
