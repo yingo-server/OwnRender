@@ -373,6 +373,24 @@ def list_bgs():
     return sorted(files, key=lambda p: p.name.lower())
 
 
+def _light_label(light) -> str:
+    """把内部代号翻译成人话（`none` 多数是「太阳在窗后→天光漫射」，直接显示会像故障）。"""
+    return {"sun": "太阳直射", "moon": "月光", "twilight": "暮光"}.get(
+        light.source,
+        "天光漫射（太阳在窗户背面）"
+        if getattr(light, "ambient_irradiance", 0.0) > 0.003
+        else "无直射（夜间基础环境光）")
+
+
+def _irr_text(light) -> str:
+    """直射辐照度；无直射时把天光漫射一并显示，避免出现「0」的误导。"""
+    txt = f"{light.irradiance:.4f}"
+    amb = getattr(light, "ambient_irradiance", 0.0)
+    if light.irradiance <= 0.0005 and amb > 0.003:
+        txt += f"（直射）· 天光 {amb:.4f}"
+    return txt
+
+
 def build_render_params(args):
     import numpy as np
     rp = {}
@@ -474,10 +492,10 @@ def run_bg_lit_generate(args, interactive=True) -> int:
         window_orientation=win_side,
         shadow_length=args.shadow_length or "auto")
 
-    u.field("主光源", light.source)
+    u.field("主光源", _light_label(light))
     u.field("方位角", f"{light.az:+.2f}°")
     u.field("高度角", f"{light.alt:+.2f}°")
-    u.field("辐照度", f"{light.irradiance:.4f}")
+    u.field("辐照度", _irr_text(light))
     u.field("色温", f"{[round(float(c), 2) for c in light.color]}")
     if light.irradiance > 0.0005:
         u.field("光斑中心",
@@ -626,8 +644,8 @@ def run_bg_lit_generate(args, interactive=True) -> int:
     u.field("位置", f"{city} ({lat:.4f}, {lon:.4f})")
     u.field("天气", f"{weather.description} 云{weather.cloud}%")
     u.field("光源",
-            f"{light.source} 方位{light.az:+.1f}° 高度{light.alt:+.1f}°")
-    u.field("辐照度", f"{light.irradiance:.4f}")
+            f"{_light_label(light)} 方位{light.az:+.1f}° 高度{light.alt:+.1f}°")
+    u.field("辐照度", _irr_text(light))
     u.field("窗格", f"{grid_rows} x {grid_cols}")
     u.field("字体", font.name)
     u.field("成品", str(final))
