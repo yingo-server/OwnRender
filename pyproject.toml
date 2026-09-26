@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ownrender"
+version = "11.0.0"
+description = "物理光照墙面渲染引擎（3D 房间 / 面光源太阳 / 穹顶天空 / 光传输）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+
+# ── 依赖策略（见 agent.md §3.4）────────────────────────────
+# 只写逻辑与算法；通用能力一律交给成熟第三方库。
+dependencies = [
+    "numpy>=1.24",           # 数值底座
+    "Pillow>=9.0",           # 图像 IO / 字体绘制
+    "requests>=2.28",        # 天气 / NTP
+    "imageio>=2.31",         # 图像读写（多格式兜底）
+    "charset-normalizer>=3", # 编码探测（多终端/多语言）
+    "wcwidth>=0.2",          # 中日韩宽字符宽度（TUI 对齐）
+]
+
+[project.optional-dependencies]
+# 商业级交互层（TUI/CLI 不自己写）
+cli = ["typer>=0.9", "rich>=13", "textual>=0.50", "pyfiglet>=0.8",
+       "pydantic>=2", "loguru>=0.7"]
+# 图像分析（裂缝/污渍检测）
+vision = ["opencv-python-headless>=4.8", "scikit-image>=0.22"]
+# 几何（房间网格/交点/法线）
+geom = ["trimesh>=4.0", "scipy>=1.11"]
+# 3DGS（B 阶段）
+splat = ["plyfile>=1.0"]
+dev = ["pytest>=7.4", "pytest-cov>=5"]
+
+[project.scripts]
+# 入口指向现有实现，重构期间保持可用（agent.md §14 回退策略）
+ownrender = "main:main"
+ownrender-tui = "main:main"
+
+[tool.setuptools]
+packages = [
+    "ownrender", "ownrender.core", "ownrender.light",
+    "frame_interact", "frame_light", "frame_render",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
