@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-22.04,    name: linux-x86_64 }
+          - { os: ubuntu-22.04,     name: linux-x86_64 }
           - { os: ubuntu-24.04-arm, name: linux-aarch64 }
     steps:
       - uses: actions/checkout@v4
@@ -58,14 +58,19 @@ jobs:
 
       - name: Nuitka 打包
         shell: bash
-        run: python tools/build_nuitka.py --no-onefile --out dist --archive --name "${{ matrix.name }}"
+        run: python tools/build_nuitka.py --no-onefile --out dist --archive --name "OwnRender-${{ matrix.name }}"
 
       - name: 冒烟测试（二进制必须能独立跑）
         shell: bash
         run: |
           set -e
-          DIR=$(ls -d dist/OwnRender-* | head -1)
+          DIR=$(ls -d dist/OwnRender-* 2>/dev/null | head -1)
+          if [ -z "$DIR" ]; then
+            DIR=$(find dist -mindepth 1 -maxdepth 1 -type d ! -name '*.build' ! -name '*.dist' | head -1)
+          fi
+          if [ -z "$DIR" ]; then echo "找不到产物目录"; ls -la dist; exit 1; fi
           BIN="$DIR/ownrender"
+          [ -f "$DIR/ownrender.exe" ] && BIN="$DIR/ownrender.exe"
           echo "== 二进制: $BIN"
           "$BIN" --version
           "$BIN" --list-backgrounds --no-color | head -3
@@ -96,8 +101,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x86,    image: debian:bookworm,          platform: 'linux/386',    timeout: 150, soft: false }
-          - { name: linux-armv7,  image: arm32v7/debian:bookworm,  platform: 'linux/arm/v7', timeout: 330, soft: true }
+          - { name: linux-x86,   image: debian:bookworm,         platform: 'linux/386',    timeout: 150, soft: false }
+          - { name: linux-armv7, image: arm32v7/debian:bookworm, platform: 'linux/arm/v7', timeout: 330, soft: true }
     steps:
       - uses: actions/checkout@v4
 
@@ -122,8 +127,12 @@ jobs:
               echo "== 容器内 Python:"; /venv/bin/python -V; uname -m
               /venv/bin/python -m compileall -q .
               /venv/bin/python tools/build_nuitka.py --no-onefile --out dist --archive \
-                --name "${{ matrix.name }}"
-              DIR=$(ls -d dist/OwnRender-* | head -1)
+                --name "OwnRender-${{ matrix.name }}"
+              DIR=$(ls -d dist/OwnRender-* 2>/dev/null | head -1)
+              if [ -z "$DIR" ]; then
+                DIR=$(find dist -mindepth 1 -maxdepth 1 -type d ! -name "*.build" ! -name "*.dist" | head -1)
+              fi
+              if [ -z "$DIR" ]; then echo "找不到产物目录"; ls -la dist; exit 1; fi
               echo "== 冒烟测试: $DIR"
               "$DIR/ownrender" --version
               "$DIR/ownrender" --list-backgrounds --no-color | head -3
@@ -154,9 +163,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest,  name: windows-x86_64, arch: x64,   soft: false }
-          - { os: windows-latest,  name: windows-x86,    arch: x86,   soft: false }
-          - { os: windows-11-arm,  name: windows-arm64,  arch: arm64, soft: true }
+          - { os: windows-latest, name: windows-x86_64, arch: x64,   soft: false }
+          - { os: windows-latest, name: windows-x86,    arch: x86,   soft: false }
+          - { os: windows-11-arm, name: windows-arm64,  arch: arm64, soft: true }
     steps:
       - uses: actions/checkout@v4
 
@@ -186,13 +195,17 @@ jobs:
 
       - name: Nuitka 打包
         shell: bash
-        run: python tools/build_nuitka.py --no-onefile --out dist --archive --name "${{ matrix.name }}"
+        run: python tools/build_nuitka.py --no-onefile --out dist --archive --name "OwnRender-${{ matrix.name }}"
 
       - name: 冒烟测试（二进制必须能独立跑）
         shell: bash
         run: |
           set -e
-          DIR=$(ls -d dist/OwnRender-* | head -1)
+          DIR=$(ls -d dist/OwnRender-* 2>/dev/null | head -1)
+          if [ -z "$DIR" ]; then
+            DIR=$(find dist -mindepth 1 -maxdepth 1 -type d ! -name '*.build' ! -name '*.dist' | head -1)
+          fi
+          if [ -z "$DIR" ]; then echo "找不到产物目录"; ls -la dist; exit 1; fi
           BIN="$DIR/ownrender.exe"
           echo "== 二进制: $BIN"
           "$BIN" --version
@@ -212,7 +225,7 @@ jobs:
           retention-days: 14
 
   # ══════════════════════════════════════════════════════════════
-  # ④ Android：x86(NULL) 不需要；产 arm64-v8a / armeabi-v7a 两套 .so
+  # ④ Android：产 arm64-v8a / armeabi-v7a 两套 .so
   #    用 python-for-android 构建，从 APK 中提取 lib/*/*.so
   # ══════════════════════════════════════════════════════════════
   android:
@@ -263,20 +276,23 @@ jobs:
       - name: 修 p4a 2023.9.16 的 dist 模板 bug
         run: |
           # 该版本生成的 dists/*/build.py 引用了 apk 阶段并未定义的 --orientation，
-          # 打包时会 AttributeError: 'Namespace' object has no attribute 'orientation'
+          # 打包时会 AttributeError: 'Namespace' object has no attribute 'orientation'。
+          # 注意：只能替换「读取」，绝不能碰赋值语句左边（否则
+          #   getattr(args, 'x', None) = ...  → SyntaxError: cannot assign to function call）
           F="$HOME/.local/share/python-for-android/dists/ownrender-${{ matrix.abi }}/build.py"
           ls -la "$F"
           python - "$F" <<'PY'
-          import io, sys
+          import io, re, sys
           p = sys.argv[1]
           s = io.open(p, encoding="utf-8").read()
-          new = s.replace("args.orientation",
-                          "getattr(args, 'orientation', 'portrait')")
-          new = new.replace("args.manifest_orientation",
-                            "getattr(args, 'manifest_orientation', None)")
-          io.open(p, "w", encoding="utf-8").write(new)
-          print("orientation 补丁:", new != s)
+          n = re.sub(r"args\.orientation(?!\s*[+\-*/%|&^]?=(?!=))",
+                     "getattr(args, 'orientation', 'portrait')", s)
+          n = re.sub(r"args\.manifest_orientation(?!\s*[+\-*/%|&^]?=(?!=))",
+                     "getattr(args, 'manifest_orientation', None)", n)
+          io.open(p, "w", encoding="utf-8").write(n)
+          print("orientation 补丁生效:", n != s)
           PY
+          python -c "import ast,io,sys;ast.parse(io.open(sys.argv[1],encoding='utf-8').read());print('build.py 语法校验通过')" "$F"
 
       - name: 打包 APK（复用已有 dist，只为提取 .so）
         env:
@@ -371,7 +387,8 @@ jobs:
                -exec cp -v {} out/ \;
           ls -la out/
           # 一个平台包都没有就别发空 Release（只发过 docs 不算）
-          n=$(ls out 2>/dev/null | grep -cE '^OwnRender-(linux|windows|android)' || true)
+          # 兼容两种命名：OwnRender-xxx 与（历史遗留的）无前缀命名
+          n=$(ls out 2>/dev/null | grep -cE '^(OwnRender-)?(linux|windows|android)' || true)
           echo "平台包数量：$n"
           if [ "$n" -eq 0 ]; then echo "SKIP_RELEASE=1" >> "$GITHUB_ENV"; fi
 
@@ -386,10 +403,10 @@ jobs:
             echo "## 下载"
             echo "| 文件 | 平台/架构 |"
             echo "|---|---|"
-            for f in out/OwnRender-*.tar.gz out/OwnRender-*.zip; do
+            for f in out/*.tar.gz out/*.zip; do
               [ -e "$f" ] || continue
               case "$f" in *docs*) continue ;; esac
-              echo "| \`$(basename "$f")\` | $(basename "$f" | sed -E 's/^OwnRender-([^-]*-[A-Za-z0-9_]+).*/\1/') |"
+              echo "| \`$(basename "$f")\` | $(basename "$f" | sed -E 's/^OwnRender-([A-Za-z0-9_]+-[A-Za-z0-9_]+).*/\1/') |"
             done
             echo
             echo "## 使用方式"
