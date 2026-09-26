@@ -1,0 +1,191 @@
+name: Verify Release
+
+# 独立的验收流程：自动拉取 Release 里的各平台包 → 在对应平台/架构上真跑一遍
+# → 每个平台的输出按 平台_架构 上传为可下载 artifact（test_<平台>_<架构>）
+on:
+  workflow_run:
+    workflows: ["Build & Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release 标签（默认 nightly）'
+        default: 'nightly'
+  schedule:
+    - cron: '30 3 * * *'          # 每天 UTC 03:30 复验一次 nightly
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event.inputs.tag || 'nightly' }}
+  PYTHONUNBUFFERED: '1'
+  PYTHONUTF8: '1'
+
+jobs:
+  verify:
+    name: test_${{ matrix.key }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.soft == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { key: linux_x86_64,  runner: ubuntu-22.04,     asset: 'OwnRender-linux-x86_64.tar.gz',   kind: native,  plat: linux, arch: x86_64 }
+          - { key: linux_x86,     runner: ubuntu-22.04,     asset: 'OwnRender-linux-x86.tar.gz',      kind: docker,  plat: linux, arch: x86,     image: 'i386/debian:bookworm', platform: 'linux/386' }
+          - { key: linux_aarch64, runner: ubuntu-24.04-arm, asset: 'OwnRender-linux-aarch64.tar.gz',  kind: native,  plat: linux, arch: aarch64 }
+          - { key: linux_armv7,   runner: ubuntu-22.04,     asset: 'OwnRender-linux-armv7.tar.gz',    kind: docker,  plat: linux, arch: armv7l,  image: 'arm32v7/debian:bookworm', platform: 'linux/arm/v7', soft: true }
+          - { key: windows_x86_64, runner: windows-latest,  asset: 'OwnRender-windows-x86_64.zip',    kind: win,     plat: windows, arch: amd64 }
+          - { key: windows_x86,    runner: windows-latest,  asset: 'OwnRender-windows-x86.zip',       kind: win,     plat: windows, arch: x86 }
+          - { key: windows_arm64,  runner: windows-11-arm,  asset: 'OwnRender-windows-arm64.zip',     kind: win,     plat: windows, arch: arm64, soft: true }
+          - { key: android_arm64_v8a,   runner: ubuntu-22.04, asset: 'OwnRender-android-arm64-v8a-so.zip',   kind: ziponly, plat: android, arch: arm64-v8a }
+          - { key: android_armeabi_v7a, runner: ubuntu-22.04, asset: 'OwnRender-android-armeabi-v7a-so.zip', kind: ziponly, plat: android, arch: armeabi-v7a }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 qemu（armv7 容器需要）
+        if: matrix.kind == 'docker' && matrix.plat == 'linux' && matrix.arch == 'armv7l'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+      - name: 拉取 Release 资产
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          mkdir -p dl out
+          gh release download "$TAG" --pattern '${{ matrix.asset }}' --dir dl --clobber \
+            || { echo "::warning::精确资产名未匹配，下面列出 Release 全部资产名：";
+                 gh release view "$TAG" --json assets -q '.assets[].name'; exit 1; }
+          ls -la dl
+
+      - name: 安装验收脚本用到的 Python（宿主）
+        if: matrix.kind == 'native' || matrix.kind == 'win'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 原生 Linux ────────────────────────────────────────────
+      - name: 解压 + 验收（原生 Linux）
+        if: matrix.kind == 'native'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p pkg && tar -xzf dl/${{ matrix.asset }} -C pkg
+          python3 tools/verify_package.py --package-dir pkg --out-dir out/${{ matrix.key }} \
+            --platform ${{ matrix.plat }} --arch ${{ matrix.arch }} --ascii-env
+
+      # ── 容器内验收（32 位 x86 / armv7）────────────────────────
+      - name: 解压 + 容器内验收
+        if: matrix.kind == 'docker'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p pkg && tar -xzf dl/${{ matrix.asset }} -C pkg
+          docker run --rm --platform '${{ matrix.platform }}' \
+            -v "$PWD:/w" -w /w \
+            -e LANG=C.UTF-8 -e PYTHONUTF8=1 \
+            '${{ matrix.image }}' bash -lc '
+              set -e
+              apt-get update -qq >/dev/null 2>&1
+              apt-get install -y -qq python3 >/dev/null 2>&1
+              python3 tools/verify_package.py --package-dir pkg \
+                --out-dir out/${{ matrix.key }} \
+                --platform ${{ matrix.plat }} --arch ${{ matrix.arch }} --ascii-env '
+
+      # ── Windows ──────────────────────────────────────────────
+      - name: 解压 + 验收（Windows）
+        if: matrix.kind == 'win'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p pkg && unzip -q -o dl/${{ matrix.asset }} -d pkg
+          python tools/verify_package.py --package-dir pkg --out-dir out/${{ matrix.key }} \
+            --platform ${{ matrix.plat }} --arch ${{ matrix.arch }}
+
+      # ── Android：只能验包内容（.so 无法在宿主加载）─────────────
+      - name: 验收（Android .so 包内容）
+        if: matrix.kind == 'ziponly'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, zipfile
+          key = "${{ matrix.key }}"
+          abi = "${{ matrix.arch }}"
+          z = zipfile.ZipFile("dl/${{ matrix.asset }}")
+          names = z.namelist()
+          sos = [n for n in names if n.endswith(".so")]
+          need = {
+            "libpython3": any("libpython3" in n for n in sos),
+            "numpy": any("numpy" in n.lower() or "_multiarray" in n for n in sos),
+            "pillow": any("pillow" in n.lower() or "_imaging" in n.lower() for n in sos),
+          }
+          out = os.path.join("out", key)
+          os.makedirs(out, exist_ok=True)
+          problems = ["缺少组件：%s" % k for k, ok in need.items() if not ok]
+          problems += ["包内没有 .so"] if not sos else []
+          verdict = "PASS" if not problems else "FAIL"
+          with open(os.path.join(out, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"platform": "android", "arch": abi, "verdict": verdict,
+                       "so_count": len(sos), "components": need,
+                       "problems": problems, "files": names[:200]}, f,
+                      ensure_ascii=False, indent=2)
+          with open(os.path.join(out, "summary.txt"), "w", encoding="utf-8") as f:
+            f.write("平台/架构：android/%s\n结论：%s\n.so 数量：%d\n" % (abi, verdict, len(sos)))
+            f.write("组件：%s\n" % need)
+            for p in problems:
+              f.write("problem: %s\n" % p)
+          print(verdict, need, len(sos))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test_${{ matrix.key }}
+          path: out/${{ matrix.key }}
+          retention-days: 30
+
+  # ── 汇总：把各平台结论合成一张表 ──────────────────────────────
+  summary:
+    name: verify-summary
+    needs: [verify]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: all
+          pattern: test_*
+
+      - name: 汇总
+        run: |
+          python - <<'PY'
+          import json, os, glob
+          rows, fails = [], []
+          for p in sorted(glob.glob("all/*/meta.json")):
+              d = json.load(open(p, encoding="utf-8"))
+              key = os.path.basename(os.path.dirname(p))
+              ok = d.get("verdict") == "PASS"
+              rows.append("| %s | %s | %s | %s |" % (
+                  d.get("platform"), d.get("arch"), key.replace("test_", ""),
+                  "✅" if ok else "❌ " + "; ".join(d.get("problems") or [])))
+              if not ok:
+                  fails.append(key)
+          body = ["# Release 验收结果", "",
+                  "| 平台 | 架构 | artifact | 结论 |", "|---|---|---|---|"] + rows
+          txt = "\n".join(body) + "\n"
+          open("verify-summary.md", "w", encoding="utf-8").write(txt)
+          print(txt)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write(txt)
+          print("FAIL 数：%d" % len(fails))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test_summary
+          path: verify-summary.md
+          retention-days: 30
